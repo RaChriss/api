@@ -1,0 +1,101 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Firebase Service Account (sensitive credentials)
+firebase-service-account.json
+firebase-service-account-*.json
+*-firebase-credentials.json
+
+# Build outputs
+dist/
+build/
+out/
+*.tsbuildinfo
+.next/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# OS specific files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Testing
+coverage/
+.nyc_output/
+.jest/
+*.lcov
+
+# Runtime logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Database backups
+*.backup
+*.sql.bak
+
+# Package lock files (optional - uncomment if you prefer lock files)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# Docker
+.dockerignore
+
+# VS Code extensions cache
+.vscode/extensions
+
+# Miscellaneous
+.cache/
+dist-es/
+lib-es/
+*.pid
+*.seed
+*.pid.lock
+
+# API keys and sensitive data
+.api-keys
+secrets/
+config/secrets.json
+
+# Docker volumes
+data/
+volumes/
+
+# Compiled files
+*.js
+!server.js
+!*.config.js
+src/**/*.js
+src/**/*.js.map

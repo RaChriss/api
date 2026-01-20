@@ -14,6 +14,8 @@ declare global {
                 token: string;
                 expires_at: Date;
             };
+            dataMode?: 'firebase' | 'postgres';
+            isOnline?: boolean;
         }
     }
 }
