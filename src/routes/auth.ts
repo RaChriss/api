@@ -228,21 +228,28 @@ router.post('/login',
             };
             
             // Aussi synchroniser vers PostgreSQL (cache local)
-            const existingLocal = await UserService.findByEmail(email);
+            let existingLocal = await UserService.findByEmail(email);
             if (!existingLocal) {
               try {
-                await UserService.createFromFirebase({
+                const newUser = await UserService.create({
                   nom: firebaseUser.nom,
                   prenom: firebaseUser.prenom,
                   email: firebaseUser.email,
-                  password: firebaseUser.password,
-                  id_type_user: idTypeUser,
-                  firebase_uid: firebaseUser.firebase_uid
+                  password: firebaseUser.password, // Déjà hashé dans Firebase
+                  id_type_user: idTypeUser
                 });
                 console.log(`✅ Utilisateur synchronisé vers PostgreSQL (cache local)`);
-              } catch (syncError) {
-                console.log(`⚠️ Erreur sync PostgreSQL: ${syncError}`);
+                
+                // Utiliser l'ID PostgreSQL pour les tentatives de connexion
+                user.id_user = newUser.id_user;
+              } catch (syncError: any) {
+                console.log(`⚠️ Erreur sync PostgreSQL: ${syncError.message}`);
+                // En cas d'erreur de sync, on ne peut pas enregistrer les tentatives
+                // mais on peut quand même permettre la connexion
               }
+            } else {
+              // Utiliser l'ID PostgreSQL existant
+              user.id_user = existingLocal.id_user;
             }
           }
         } catch (error) {
@@ -284,36 +291,58 @@ router.post('/login',
       console.log(`🔐 Vérification mot de passe: ${isValidPassword ? '✅ Correct' : '❌ Incorrect'}`);
       
       if (!isValidPassword) {
-        // Enregistrer la tentative échouée
-        await LoginAttemptService.recordAttempt(user.id_user, false, clientIp);
-        
-        // Vérifier si l'utilisateur doit être bloqué
-        const shouldBlock = await LoginAttemptService.shouldBlockUser(user.id_user, user.id_type_user);
-        
-        if (shouldBlock) {
-          await UserService.blockUser(user.id_user);
-          res.status(403).json({
+        // Enregistrer la tentative échouée seulement si l'utilisateur existe dans PostgreSQL
+        if (user && user.id_user) {
+          try {
+            await LoginAttemptService.recordAttempt(user.id_user, false, clientIp);
+            
+            // Vérifier si l'utilisateur doit être bloqué
+            const shouldBlock = await LoginAttemptService.shouldBlockUser(user.id_user, user.id_type_user);
+            
+            if (shouldBlock) {
+              await UserService.blockUser(user.id_user);
+              res.status(403).json({
+                success: false,
+                error: 'Trop de tentatives échouées. Votre compte a été bloqué.'
+              });
+              return;
+            }
+
+            // Obtenir le nombre de tentatives restantes
+            const failedAttempts = await LoginAttemptService.getRecentFailedAttempts(user.id_user);
+            const limit = await LoginAttemptService.getAttemptLimit(user.id_type_user);
+            const remaining = limit - failedAttempts;
+
+            res.status(401).json({
+              success: false,
+              error: 'Email ou mot de passe incorrect',
+              tentatives_restantes: remaining
+            });
+          } catch (attemptError: any) {
+            console.log(`⚠️ Erreur enregistrement tentative: ${attemptError.message}`);
+            res.status(401).json({
+              success: false,
+              error: 'Email ou mot de passe incorrect'
+            });
+          }
+        } else {
+          res.status(401).json({
             success: false,
-            error: 'Trop de tentatives échouées. Votre compte a été bloqué.'
+            error: 'Email ou mot de passe incorrect'
           });
-          return;
         }
-
-        // Obtenir le nombre de tentatives restantes
-        const failedAttempts = await LoginAttemptService.getRecentFailedAttempts(user.id_user);
-        const limit = await LoginAttemptService.getAttemptLimit(user.id_type_user);
-        const remaining = limit - failedAttempts;
-
-        res.status(401).json({
-          success: false,
-          error: 'Email ou mot de passe incorrect',
-          tentatives_restantes: remaining
-        });
         return;
       }
 
-      // Connexion réussie - enregistrer la tentative
-      await LoginAttemptService.recordAttempt(user.id_user, true, clientIp);
+      // Connexion réussie - enregistrer la tentative seulement si l'utilisateur existe dans PostgreSQL
+      if (user && user.id_user) {
+        try {
+          await LoginAttemptService.recordAttempt(user.id_user, true, clientIp);
+        } catch (attemptError: any) {
+          console.log(`⚠️ Erreur enregistrement tentative réussie: ${attemptError.message}`);
+          // Continuer quand même car la connexion est valide
+        }
+      }
 
       // Obtenir la durée de session pour ce type d'utilisateur
       const sessionDuration = await SessionService.getSessionDuration(user.id_type_user);

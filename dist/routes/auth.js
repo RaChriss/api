@@ -243,22 +243,29 @@ router.post('/login', [
                         date_creation: firebaseUser.date_creation
                     };
                     // Aussi synchroniser vers PostgreSQL (cache local)
-                    const existingLocal = await userService_1.default.findByEmail(email);
+                    let existingLocal = await userService_1.default.findByEmail(email);
                     if (!existingLocal) {
                         try {
-                            await userService_1.default.createFromFirebase({
+                            const newUser = await userService_1.default.create({
                                 nom: firebaseUser.nom,
                                 prenom: firebaseUser.prenom,
                                 email: firebaseUser.email,
-                                password: firebaseUser.password,
-                                id_type_user: idTypeUser,
-                                firebase_uid: firebaseUser.firebase_uid
+                                password: firebaseUser.password, // Déjà hashé dans Firebase
+                                id_type_user: idTypeUser
                             });
                             console.log(`✅ Utilisateur synchronisé vers PostgreSQL (cache local)`);
+                            // Utiliser l'ID PostgreSQL pour les tentatives de connexion
+                            user.id_user = newUser.id_user;
                         }
                         catch (syncError) {
-                            console.log(`⚠️ Erreur sync PostgreSQL: ${syncError}`);
+                            console.log(`⚠️ Erreur sync PostgreSQL: ${syncError.message}`);
+                            // En cas d'erreur de sync, on ne peut pas enregistrer les tentatives
+                            // mais on peut quand même permettre la connexion
                         }
+                    }
+                    else {
+                        // Utiliser l'ID PostgreSQL existant
+                        user.id_user = existingLocal.id_user;
                     }
                 }
             }
@@ -298,31 +305,56 @@ router.post('/login', [
         const isValidPassword = password === passwordFromDb;
         console.log(`🔐 Vérification mot de passe: ${isValidPassword ? '✅ Correct' : '❌ Incorrect'}`);
         if (!isValidPassword) {
-            // Enregistrer la tentative échouée
-            await loginAttemptService_1.default.recordAttempt(user.id_user, false, clientIp);
-            // Vérifier si l'utilisateur doit être bloqué
-            const shouldBlock = await loginAttemptService_1.default.shouldBlockUser(user.id_user, user.id_type_user);
-            if (shouldBlock) {
-                await userService_1.default.blockUser(user.id_user);
-                res.status(403).json({
-                    success: false,
-                    error: 'Trop de tentatives échouées. Votre compte a été bloqué.'
-                });
-                return;
+            // Enregistrer la tentative échouée seulement si l'utilisateur existe dans PostgreSQL
+            if (user && user.id_user) {
+                try {
+                    await loginAttemptService_1.default.recordAttempt(user.id_user, false, clientIp);
+                    // Vérifier si l'utilisateur doit être bloqué
+                    const shouldBlock = await loginAttemptService_1.default.shouldBlockUser(user.id_user, user.id_type_user);
+                    if (shouldBlock) {
+                        await userService_1.default.blockUser(user.id_user);
+                        res.status(403).json({
+                            success: false,
+                            error: 'Trop de tentatives échouées. Votre compte a été bloqué.'
+                        });
+                        return;
+                    }
+                    // Obtenir le nombre de tentatives restantes
+                    const failedAttempts = await loginAttemptService_1.default.getRecentFailedAttempts(user.id_user);
+                    const limit = await loginAttemptService_1.default.getAttemptLimit(user.id_type_user);
+                    const remaining = limit - failedAttempts;
+                    res.status(401).json({
+                        success: false,
+                        error: 'Email ou mot de passe incorrect',
+                        tentatives_restantes: remaining
+                    });
+                }
+                catch (attemptError) {
+                    console.log(`⚠️ Erreur enregistrement tentative: ${attemptError.message}`);
+                    res.status(401).json({
+                        success: false,
+                        error: 'Email ou mot de passe incorrect'
+                    });
+                }
             }
-            // Obtenir le nombre de tentatives restantes
-            const failedAttempts = await loginAttemptService_1.default.getRecentFailedAttempts(user.id_user);
-            const limit = await loginAttemptService_1.default.getAttemptLimit(user.id_type_user);
-            const remaining = limit - failedAttempts;
-            res.status(401).json({
-                success: false,
-                error: 'Email ou mot de passe incorrect',
-                tentatives_restantes: remaining
-            });
+            else {
+                res.status(401).json({
+                    success: false,
+                    error: 'Email ou mot de passe incorrect'
+                });
+            }
             return;
         }
-        // Connexion réussie - enregistrer la tentative
-        await loginAttemptService_1.default.recordAttempt(user.id_user, true, clientIp);
+        // Connexion réussie - enregistrer la tentative seulement si l'utilisateur existe dans PostgreSQL
+        if (user && user.id_user) {
+            try {
+                await loginAttemptService_1.default.recordAttempt(user.id_user, true, clientIp);
+            }
+            catch (attemptError) {
+                console.log(`⚠️ Erreur enregistrement tentative réussie: ${attemptError.message}`);
+                // Continuer quand même car la connexion est valide
+            }
+        }
         // Obtenir la durée de session pour ce type d'utilisateur
         const sessionDuration = await sessionService_1.default.getSessionDuration(user.id_type_user);
         // Créer une session

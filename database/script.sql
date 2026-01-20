@@ -22,7 +22,7 @@ CREATE TABLE User_(
    nom VARCHAR(50) NOT NULL,
    prenom VARCHAR(50),
    email VARCHAR(100) UNIQUE NOT NULL,
-   password VARCHAR(255) NOT NULL,  -- Hash du mot de passe
+   password VARCHAR(255) NOT NULL, 
    firebase_uid VARCHAR(128),  -- UID Firebase pour synchronisation
    date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
    est_bloque BOOLEAN DEFAULT FALSE,
