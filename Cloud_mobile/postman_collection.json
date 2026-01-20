@@ -1,0 +1,151 @@
+{
+  "info": {
+    "name": "Signalements API",
+    "description": "Collection d'endpoints pour l'API de gestion des signalements",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/health",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["health"]
+        },
+        "description": "Vérifie que le serveur est en ligne"
+      },
+      "response": []
+    },
+    {
+      "name": "Tous les signalements",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/api/signalements",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "signalements"]
+        },
+        "description": "Récupère tous les signalements"
+      },
+      "response": []
+    },
+    {
+      "name": "Signalement par ID",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/api/signalements/DOC_ID",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "signalements", "DOC_ID"]
+        },
+        "description": "Récupère un signalement par ID. Remplacez DOC_ID par un vrai ID."
+      },
+      "response": []
+    },
+    {
+      "name": "Signalements d'un utilisateur",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/api/signalements/user/USER_ID",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "signalements", "user", "USER_ID"]
+        },
+        "description": "Récupère les signalements d'un utilisateur. Remplacez USER_ID par un vrai ID."
+      },
+      "response": []
+    },
+    {
+      "name": "Signalements par statut - Nouveau",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/api/signalements/status/nouveau",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "signalements", "status", "nouveau"]
+        },
+        "description": "Récupère tous les signalements avec le statut 'nouveau'"
+      },
+      "response": []
+    },
+    {
+      "name": "Signalements par statut - En cours",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/api/signalements/status/en_cours",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "signalements", "status", "en_cours"]
+        },
+        "description": "Récupère tous les signalements avec le statut 'en_cours'"
+      },
+      "response": []
+    },
+    {
+      "name": "Signalements par statut - Terminé",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/api/signalements/status/termine",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "signalements", "status", "termine"]
+        },
+        "description": "Récupère tous les signalements avec le statut 'termine'"
+      },
+      "response": []
+    }
+  ]
+}

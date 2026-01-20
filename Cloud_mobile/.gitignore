@@ -1,0 +1,76 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Backend
+backend/node_modules/
+backend/dist/
+backend/.DS_Store
+backend/.vscode/
+backend/.idea/
+
+# Frontend
+node_modules/
+dist/
+.DS_Store
+.vscode/
+.idea/
+
+# Build
+/android/app/build
+/android/.gradle
+/ios/build
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Package managers
+npm-shrinkwrap.json
+yarn-lock
+pnpm-lock.yaml
+
+# Firebase
+.runtimeconfig.json
+firebase-debug.log
+
+# Secrets - ensure backend service account JSON is not tracked
+backend/fir-project-*-firebase-adminsdk-*.json
+backend/firebase-service-account*.json
+
+# Testing
+coverage/
+.nyc_output/
+
+# Compiled output
+out/
+build/

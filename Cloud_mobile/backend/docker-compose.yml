@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  signalement-api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
+      - FIREBASE_PRIVATE_KEY_ID=${FIREBASE_PRIVATE_KEY_ID}
+      - FIREBASE_PRIVATE_KEY=${FIREBASE_PRIVATE_KEY}
+      - FIREBASE_CLIENT_EMAIL=${FIREBASE_CLIENT_EMAIL}
+      - FIREBASE_CLIENT_ID=${FIREBASE_CLIENT_ID}
+      - FIREBASE_AUTH_URI=https://accounts.google.com/o/oauth2/auth
+      - FIREBASE_TOKEN_URI=https://oauth2.googleapis.com/token
+      - PORT=3000
+      - CORS_ORIGIN=http://localhost:5173,http://localhost:8100
+    restart: unless-stopped
