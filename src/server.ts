@@ -53,7 +53,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
  * GET /health - Health check endpoint
  */
 app.get('/health', async (req: Request, res: Response) => {
-  const isFirebaseConnected = hybridDataService.isFirebaseAvailable();
+  const isFirebaseConnected = hybridDataService.isFirebaseAvailableSync();
   const syncStatus = await hybridDataService.getSyncStatus();
   
   res.status(200).json({
@@ -75,7 +75,7 @@ app.get('/health', async (req: Request, res: Response) => {
  * GET /api - API information and available endpoints
  */
 app.get('/api', async (req: Request, res: Response) => {
-  const isFirebaseConnected = hybridDataService.isFirebaseAvailable();
+  const isFirebaseConnected = hybridDataService.isFirebaseAvailableSync();
   const syncStatus = await hybridDataService.getSyncStatus();
   
   res.status(200).json({

@@ -19,8 +19,8 @@ export const connectionMiddleware = async (
   next: NextFunction
 ): Promise<void> => {
   try {
-    // Vérifier l'état de la connexion Firebase
-    const isOnline = hybridDataService.isFirebaseAvailable();
+    // Vérifier l'état de la connexion Firebase (utilise le cache si récent)
+    const isOnline = hybridDataService.isFirebaseAvailableSync();
     
     // Ajouter les informations de connexion à la requête
     req.isOnline = isOnline;
@@ -29,8 +29,6 @@ export const connectionMiddleware = async (
     // Ajouter un header de réponse pour informer le client
     res.set('X-Data-Source', req.dataMode);
     res.set('X-Firebase-Status', isOnline ? 'connected' : 'offline');
-    
-    console.log(`📡 Mode de données: ${req.dataMode} (Firebase: ${isOnline ? 'connecté' : 'déconnecté'})`);
     
     next();
   } catch (error) {
@@ -95,20 +93,21 @@ export const requirePostgres = (
 /**
  * Middleware pour les endpoints de synchronisation uniquement
  */
-export const syncOnlyMiddleware = (
+export const syncOnlyMiddleware = async (
   req: Request, 
   res: Response, 
   next: NextFunction
-): void => {
+): Promise<void> => {
   // Ces endpoints nécessitent toujours PostgreSQL pour lire les données non synchronisées
   req.dataMode = 'postgres';
-  req.isOnline = hybridDataService.isFirebaseAvailable();
+  const isOnline = await hybridDataService.isFirebaseAvailable();
+  req.isOnline = isOnline;
   
   res.set('X-Data-Source', 'postgres');
-  res.set('X-Firebase-Status', req.isOnline ? 'available' : 'offline');
+  res.set('X-Firebase-Status', isOnline ? 'available' : 'offline');
   res.set('X-Sync-Mode', 'true');
   
-  if (!req.isOnline) {
+  if (!isOnline) {
     res.status(400).json({
       error: 'Firebase indisponible. Impossible de synchroniser.',
       retry_in: 30,
