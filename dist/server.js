@@ -16,6 +16,7 @@ const hybridDataService_1 = require("./services/hybridDataService");
 const firebase_2 = __importDefault(require("./routes/firebase"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const admin_1 = __importDefault(require("./routes/admin"));
+const signalements_1 = __importDefault(require("./routes/signalements"));
 // Load environment variables
 dotenv_1.default.config();
 // Initialize Firebase
@@ -146,6 +147,8 @@ app.use('/api/auth', auth_1.default);
 app.use('/api/admin', admin_1.default);
 // Firebase routes
 app.use('/api/firebase', firebase_2.default);
+// Signalements routes
+app.use('/api/signalements', signalements_1.default);
 app.use((err, req, res, next) => {
     console.error('Error:', err);
     const status = err.status || 500;

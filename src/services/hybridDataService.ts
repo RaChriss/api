@@ -1,5 +1,6 @@
 import * as admin from 'firebase-admin';
 import pool from '../config/database';
+import { isFirebaseOnline, getFirebaseStatus } from '../config/firebase';
 
 interface SignalementData {
   location?: { latitude: number; longitude: number };
@@ -19,11 +20,9 @@ interface UserData {
 
 export class HybridDataService {
   private static instance: HybridDataService;
-  private isOnline: boolean = true;
-  private connectionCheckInterval: NodeJS.Timeout | null = null;
 
   private constructor() {
-    this.startConnectionMonitoring();
+    // Initialisation simple - la surveillance est gérée par firebase.ts
   }
 
   public static getInstance(): HybridDataService {
@@ -34,51 +33,26 @@ export class HybridDataService {
   }
 
   /**
-   * Démarre la surveillance de la connexion Firebase
+   * Retourne l'état de la connexion Firebase
    */
-  private startConnectionMonitoring(): void {
-    // Vérifier la connexion toutes les 30 secondes
-    this.connectionCheckInterval = setInterval(async () => {
-      await this.checkFirebaseConnection();
-    }, 30000);
-
-    // Vérification initiale
-    this.checkFirebaseConnection();
+  public async isFirebaseAvailable(): Promise<boolean> {
+    return await isFirebaseOnline();
   }
 
   /**
-   * Vérifie la connexion Firebase
+   * Retourne l'état synchrone (cache) de Firebase
    */
-  private async checkFirebaseConnection(): Promise<void> {
-    try {
-      await admin.firestore().collection('_health').add({
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
-      });
-      
-      if (!this.isOnline) {
-        console.log('🟢 Connexion Firebase rétablie');
-        this.isOnline = true;
-      }
-    } catch (error) {
-      if (this.isOnline) {
-        console.log('🔴 Connexion Firebase perdue, basculement vers PostgreSQL');
-        this.isOnline = false;
-      }
-    }
-  }
-
-  /**
-   * Retourne l'état de la connexion
-   */
-  public isFirebaseAvailable(): boolean {
-    return this.isOnline;
+  public isFirebaseAvailableSync(): boolean {
+    return getFirebaseStatus().available;
   }
 
   /**
    * Crée un signalement (Firebase ou PostgreSQL selon la connexion)
    */
   public async createSignalement(data: SignalementData): Promise<{ id: string; source: 'firebase' | 'postgres' }> {
-    if (this.isOnline) {
+    const isOnline = await this.isFirebaseAvailable();
+    
+    if (isOnline) {
       try {
         // Essayer Firebase en premier
         const docRef = await admin.firestore().collection('signalements').add({
@@ -91,8 +65,7 @@ export class HybridDataService {
 
         return { id: docRef.id, source: 'firebase' };
       } catch (error) {
-        console.error('Erreur Firebase, basculement vers PostgreSQL:', error);
-        this.isOnline = false;
+        console.log('⚠️ Création Firebase échouée (mode hors-ligne):', (error as Error).message);
         return await this.createSignalementPostgres(data);
       }
     } else {
@@ -126,7 +99,9 @@ export class HybridDataService {
    * Récupère les signalements (Firebase ou PostgreSQL selon la connexion)
    */
   public async getSignalements(): Promise<{ data: any[]; source: 'firebase' | 'postgres' }> {
-    if (this.isOnline) {
+    const isOnline = await this.isFirebaseAvailable();
+    
+    if (isOnline) {
       try {
         const snapshot = await admin.firestore().collection('signalements').get();
         const signalements = snapshot.docs.map(doc => ({
@@ -136,8 +111,7 @@ export class HybridDataService {
         
         return { data: signalements, source: 'firebase' };
       } catch (error) {
-        console.error('Erreur Firebase, basculement vers PostgreSQL:', error);
-        this.isOnline = false;
+        console.log('⚠️ Récupération Firebase échouée (mode hors-ligne):', (error as Error).message);
         return await this.getSignalementsPostgres();
       }
     } else {
@@ -194,7 +168,9 @@ export class HybridDataService {
    * Crée un utilisateur (Firebase ou PostgreSQL selon la connexion)
    */
   public async createUser(data: UserData): Promise<{ uid: string; source: 'firebase' | 'postgres' }> {
-    if (this.isOnline) {
+    const isOnline = await this.isFirebaseAvailable();
+    
+    if (isOnline) {
       try {
         // Créer dans Firebase Auth
         const firebaseUser = await admin.auth().createUser({
@@ -213,8 +189,7 @@ export class HybridDataService {
 
         return { uid: firebaseUser.uid, source: 'firebase' };
       } catch (error) {
-        console.error('Erreur Firebase, basculement vers PostgreSQL:', error);
-        this.isOnline = false;
+        console.log('⚠️ Création utilisateur Firebase échouée (mode hors-ligne):', (error as Error).message);
         return await this.createUserPostgres(data);
       }
     } else {
@@ -280,12 +255,10 @@ export class HybridDataService {
   }
 
   /**
-   * Nettoie les ressources
+   * Retourne le statut complet de Firebase
    */
-  public cleanup(): void {
-    if (this.connectionCheckInterval) {
-      clearInterval(this.connectionCheckInterval);
-    }
+  public getStatus(): { initialized: boolean; available: boolean; lastCheck: number } {
+    return getFirebaseStatus();
   }
 }
 

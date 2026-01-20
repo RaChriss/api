@@ -11,6 +11,7 @@ import { hybridDataService } from './services/hybridDataService';
 import firebaseRoutes from './routes/firebase';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
+import signalementRoutes from './routes/signalements';
 
 // Load environment variables
 dotenv.config();
@@ -160,6 +161,9 @@ app.use('/api/admin', adminRoutes);
 
 // Firebase routes
 app.use('/api/firebase', firebaseRoutes);
+
+// Signalements routes
+app.use('/api/signalements', signalementRoutes);
 
 // ============================================
 // Error handling middleware
