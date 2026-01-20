@@ -48,7 +48,7 @@ app.use(express_1.default.urlencoded({ limit: '10mb', extended: true }));
  * GET /health - Health check endpoint
  */
 app.get('/health', async (req, res) => {
-    const isFirebaseConnected = hybridDataService_1.hybridDataService.isFirebaseAvailable();
+    const isFirebaseConnected = hybridDataService_1.hybridDataService.isFirebaseAvailableSync();
     const syncStatus = await hybridDataService_1.hybridDataService.getSyncStatus();
     res.status(200).json({
         status: 'OK',
@@ -68,7 +68,7 @@ app.get('/health', async (req, res) => {
  * GET /api - API information and available endpoints
  */
 app.get('/api', async (req, res) => {
-    const isFirebaseConnected = hybridDataService_1.hybridDataService.isFirebaseAvailable();
+    const isFirebaseConnected = hybridDataService_1.hybridDataService.isFirebaseAvailableSync();
     const syncStatus = await hybridDataService_1.hybridDataService.getSyncStatus();
     res.status(200).json({
         service: 'Travaux Routiers API',
