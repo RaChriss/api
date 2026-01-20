@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import * as admin from 'firebase-admin';
+import { pool } from '../config/database';
+import { authenticate, requireManager } from '../middleware/auth';
 
 const router = Router();
 
@@ -179,6 +181,216 @@ router.get('/signalements/:id', async (req: Request, res: Response): Promise<voi
     console.error('Firestore query error:', error);
     res.status(400).json({
       error: 'Failed to fetch signalement',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/firebase/sync/signalements
+ * Synchronise les signalements de PostgreSQL vers Firebase
+ * Accessible uniquement aux Managers
+ */
+router.post('/sync/signalements', authenticate, requireManager, async (req: Request, res: Response): Promise<void> => {
+  try {
+    // Récupérer les signalements non synchronisés
+    const query = `
+      SELECT s.*, u.email, u.nom, u.prenom, st.libelle as status_libelle
+      FROM Signalement s
+      JOIN User_ u ON s.Id_user = u.Id_user
+      JOIN Status st ON s.Id_Status = st.Id_Status
+      WHERE s.est_synchronise = FALSE
+    `;
+    
+    const result = await pool.query(query);
+    const signalements = result.rows;
+    
+    let syncedCount = 0;
+    const batch = admin.firestore().batch();
+    
+    for (const signalement of signalements) {
+      try {
+        // Créer ou mettre à jour dans Firebase
+        const docRef = admin.firestore().collection('signalements').doc();
+        const firebaseData = {
+          location: signalement.location ? {
+            latitude: signalement.location.x,
+            longitude: signalement.location.y
+          } : null,
+          date_signalement: signalement.date_signalement,
+          user: {
+            id: signalement.id_user,
+            email: signalement.email,
+            nom: signalement.nom,
+            prenom: signalement.prenom
+          },
+          status: {
+            id: signalement.id_status,
+            libelle: signalement.status_libelle
+          },
+          synchronized_at: admin.firestore.FieldValue.serverTimestamp()
+        };
+        
+        batch.set(docRef, firebaseData);
+        
+        // Mettre à jour PostgreSQL avec l'ID Firebase
+        await pool.query(
+          'UPDATE Signalement SET firebase_id = $1, est_synchronise = TRUE WHERE Id_Signalement = $2',
+          [docRef.id, signalement.id_signalement]
+        );
+        
+        syncedCount++;
+      } catch (itemError: any) {
+        console.error(`Erreur sync signalement ${signalement.id_signalement}:`, itemError);
+      }
+    }
+    
+    // Valider le batch Firebase
+    if (syncedCount > 0) {
+      await batch.commit();
+    }
+    
+    res.status(200).json({
+      success: true,
+      synced: syncedCount,
+      total: signalements.length
+    });
+  } catch (error: any) {
+    console.error('Erreur synchronisation signalements:', error);
+    res.status(500).json({
+      error: 'Échec de la synchronisation des signalements',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/firebase/sync/users
+ * Synchronise les utilisateurs de PostgreSQL vers Firebase
+ * Accessible uniquement aux Managers
+ */
+router.post('/sync/users', authenticate, requireManager, async (req: Request, res: Response): Promise<void> => {
+  try {
+    // Récupérer les utilisateurs sans firebase_uid
+    const query = `
+      SELECT u.*, t.libelle as type_libelle
+      FROM User_ u
+      JOIN TypeUser t ON u.Id_type_user = t.Id_type_user
+      WHERE u.firebase_uid IS NULL
+    `;
+    
+    const result = await pool.query(query);
+    const users = result.rows;
+    
+    let syncedCount = 0;
+    
+    for (const user of users) {
+      try {
+        // Créer l'utilisateur dans Firebase Auth
+        const firebaseUser = await admin.auth().createUser({
+          email: user.email,
+          displayName: `${user.prenom} ${user.nom}`,
+          disabled: user.est_bloque
+        });
+        
+        // Créer le document utilisateur dans Firestore
+        await admin.firestore().collection('users').doc(firebaseUser.uid).set({
+          nom: user.nom,
+          prenom: user.prenom,
+          email: user.email,
+          type: {
+            id: user.id_type_user,
+            libelle: user.type_libelle
+          },
+          date_creation: user.date_creation,
+          est_bloque: user.est_bloque,
+          synchronized_at: admin.firestore.FieldValue.serverTimestamp()
+        });
+        
+        // Mettre à jour PostgreSQL avec l'UID Firebase
+        await pool.query(
+          'UPDATE User_ SET firebase_uid = $1 WHERE Id_user = $2',
+          [firebaseUser.uid, user.id_user]
+        );
+        
+        syncedCount++;
+      } catch (itemError: any) {
+        console.error(`Erreur sync utilisateur ${user.id_user}:`, itemError);
+      }
+    }
+    
+    res.status(200).json({
+      success: true,
+      synced: syncedCount,
+      total: users.length
+    });
+  } catch (error: any) {
+    console.error('Erreur synchronisation utilisateurs:', error);
+    res.status(500).json({
+      error: 'Échec de la synchronisation des utilisateurs',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/firebase/status
+ * Vérifier le statut de connexion Firebase
+ */
+router.get('/status', async (req: Request, res: Response): Promise<void> => {
+  try {
+    // Test simple de connexion à Firebase
+    await admin.firestore().collection('_health').add({
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    res.status(200).json({
+      connected: true,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Erreur connexion Firebase:', error);
+    res.status(200).json({
+      connected: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /api/firebase/sync-status
+ * Récupère le statut de synchronisation
+ * Accessible uniquement aux Managers
+ */
+router.get('/sync-status', authenticate, requireManager, async (req: Request, res: Response): Promise<void> => {
+  try {
+    // Compter les signalements non synchronisés
+    const signalementResult = await pool.query(
+      'SELECT COUNT(*) as count FROM Signalement WHERE est_synchronise = FALSE'
+    );
+    
+    // Compter les utilisateurs sans firebase_uid
+    const userResult = await pool.query(
+      'SELECT COUNT(*) as count FROM User_ WHERE firebase_uid IS NULL'
+    );
+    
+    // Dernière synchronisation
+    const lastSyncResult = await pool.query(`
+      SELECT MAX(CASE WHEN firebase_id IS NOT NULL THEN date_signalement END) as last_signalement_sync
+      FROM Signalement
+    `);
+    
+    res.status(200).json({
+      pending_signalements: parseInt(signalementResult.rows[0].count),
+      pending_users: parseInt(userResult.rows[0].count),
+      last_sync: lastSyncResult.rows[0].last_signalement_sync,
+      needs_sync: parseInt(signalementResult.rows[0].count) > 0 || parseInt(userResult.rows[0].count) > 0
+    });
+  } catch (error: any) {
+    console.error('Erreur statut synchronisation:', error);
+    res.status(500).json({
+      error: 'Échec de récupération du statut',
       details: error.message
     });
   }
