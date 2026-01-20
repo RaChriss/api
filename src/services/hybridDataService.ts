@@ -36,7 +36,12 @@ export class HybridDataService {
    * Retourne l'état de la connexion Firebase
    */
   public async isFirebaseAvailable(): Promise<boolean> {
-    return await isFirebaseOnline();
+    try {
+      return await isFirebaseOnline();
+    } catch (error: any) {
+      // Mode hors-ligne - ne pas logger l'erreur, c'est normal
+      return false;
+    }
   }
 
   /**
@@ -53,22 +58,37 @@ export class HybridDataService {
     const isOnline = await this.isFirebaseAvailable();
     
     if (isOnline) {
+      // Mode online : utiliser Firebase ET PostgreSQL
+      console.log('📡 Mode en ligne : création dans Firebase + PostgreSQL');
+      
       try {
-        // Essayer Firebase en premier
-        const docRef = await admin.firestore().collection('signalements').add({
-          location: data.location || null,
-          user_id: data.user_id,
-          status_id: data.status_id || 1, // Nouveau par défaut
-          date_signalement: data.date_signalement || admin.firestore.FieldValue.serverTimestamp(),
-          created_online: true
-        });
-
-        return { id: docRef.id, source: 'firebase' };
+        // 1. Créer dans PostgreSQL d'abord
+        const postgresResult = await this.createSignalementPostgres(data);
+        
+        // 2. Créer dans Firebase avec référence PostgreSQL
+        try {
+          await admin.firestore().collection('signalements').add({
+            location: data.location || null,
+            user_id: data.user_id,
+            status_id: data.status_id || 1,
+            date_signalement: data.date_signalement || admin.firestore.FieldValue.serverTimestamp(),
+            postgres_id: postgresResult.id,
+            created_online: true
+          });
+          
+          console.log('✅ Signalement créé dans Firebase + PostgreSQL');
+        } catch (firebaseError) {
+          console.warn('⚠️ Erreur Firebase (PostgreSQL OK):', (firebaseError as Error).message);
+        }
+        
+        return postgresResult; // Retourner l'ID PostgreSQL
       } catch (error) {
-        console.log('⚠️ Création Firebase échouée (mode hors-ligne):', (error as Error).message);
-        return await this.createSignalementPostgres(data);
+        console.error('❌ Erreur création signalement:', error);
+        throw error;
       }
     } else {
+      // Mode offline : PostgreSQL seulement
+      console.log('💾 Mode hors ligne : création dans PostgreSQL uniquement');
       return await this.createSignalementPostgres(data);
     }
   }
@@ -102,6 +122,9 @@ export class HybridDataService {
     const isOnline = await this.isFirebaseAvailable();
     
     if (isOnline) {
+      // Mode online : Firebase en priorité, PostgreSQL en fallback
+      console.log('📡 Mode en ligne : lecture Firebase (avec fallback PostgreSQL)');
+      
       try {
         const snapshot = await admin.firestore().collection('signalements').get();
         const signalements = snapshot.docs.map(doc => ({
@@ -109,12 +132,15 @@ export class HybridDataService {
           ...doc.data()
         }));
         
+        console.log(`✅ ${signalements.length} signalements récupérés depuis Firebase`);
         return { data: signalements, source: 'firebase' };
       } catch (error) {
-        console.log('⚠️ Récupération Firebase échouée (mode hors-ligne):', (error as Error).message);
+        console.log('⚠️ Récupération Firebase échouée, utilisation de PostgreSQL:', (error as Error).message);
         return await this.getSignalementsPostgres();
       }
     } else {
+      // Mode offline : PostgreSQL seulement
+      console.log('💾 Mode hors ligne : lecture PostgreSQL uniquement');
       return await this.getSignalementsPostgres();
     }
   }
@@ -171,28 +197,49 @@ export class HybridDataService {
     const isOnline = await this.isFirebaseAvailable();
     
     if (isOnline) {
+      // Mode online : utiliser Firebase ET PostgreSQL
+      console.log('📡 Mode en ligne : création utilisateur Firebase + PostgreSQL');
+      
       try {
-        // Créer dans Firebase Auth
-        const firebaseUser = await admin.auth().createUser({
-          email: data.email,
-          displayName: `${data.prenom} ${data.nom}`
-        });
+        // 1. Créer dans PostgreSQL d'abord
+        const postgresResult = await this.createUserPostgres(data);
+        
+        // 2. Créer dans Firebase Auth + Firestore
+        try {
+          const firebaseUser = await admin.auth().createUser({
+            email: data.email,
+            displayName: `${data.prenom} ${data.nom}`
+          });
 
-        // Créer dans Firestore
-        await admin.firestore().collection('users').doc(firebaseUser.uid).set({
-          nom: data.nom,
-          prenom: data.prenom,
-          email: data.email,
-          type_user_id: data.type_user_id,
-          date_creation: admin.firestore.FieldValue.serverTimestamp()
-        });
-
-        return { uid: firebaseUser.uid, source: 'firebase' };
+          // Créer dans Firestore avec référence PostgreSQL
+          await admin.firestore().collection('users').doc(firebaseUser.uid).set({
+            nom: data.nom,
+            prenom: data.prenom,
+            email: data.email,
+            type_user_id: data.type_user_id,
+            postgres_id: postgresResult.uid,
+            date_creation: admin.firestore.FieldValue.serverTimestamp()
+          });
+          
+          // 3. Mettre à jour PostgreSQL avec l'UID Firebase
+          await pool.query(
+            'UPDATE User_ SET firebase_uid = $1 WHERE id_user = $2',
+            [firebaseUser.uid, postgresResult.uid]
+          );
+          
+          console.log('✅ Utilisateur créé dans Firebase + PostgreSQL');
+        } catch (firebaseError) {
+          console.warn('⚠️ Erreur Firebase Auth (PostgreSQL OK):', (firebaseError as Error).message);
+        }
+        
+        return postgresResult; // Retourner l'ID PostgreSQL
       } catch (error) {
-        console.log('⚠️ Création utilisateur Firebase échouée (mode hors-ligne):', (error as Error).message);
-        return await this.createUserPostgres(data);
+        console.error('❌ Erreur création utilisateur:', error);
+        throw error;
       }
     } else {
+      // Mode offline : PostgreSQL seulement
+      console.log('💾 Mode hors ligne : création utilisateur PostgreSQL uniquement');
       return await this.createUserPostgres(data);
     }
   }

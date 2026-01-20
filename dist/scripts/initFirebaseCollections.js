@@ -48,69 +48,85 @@ const admin = __importStar(require("firebase-admin"));
 async function initializeAllFirebaseCollections() {
     console.log('🚀 Début de l\'initialisation des collections Firebase...');
     try {
-        // Initialisation Firebase
-        const firebaseApp = (0, firebase_1.initializeFirebase)();
-        if (!firebaseApp) {
-            throw new Error('Impossible d\'initialiser Firebase');
+        // Vérifier la configuration Firebase avant l'initialisation
+        const serviceAccountPath = require('path').join(__dirname, '../../firebase-service-account.json');
+        if (!require('fs').existsSync(serviceAccountPath)) {
+            throw new Error(`Fichier de configuration manquant: ${serviceAccountPath}`);
+        }
+        // Initialisation Firebase avec gestion d'erreur
+        let firebaseApp;
+        try {
+            firebaseApp = (0, firebase_1.initializeFirebase)();
+            if (!firebaseApp) {
+                throw new Error('Impossible d\'initialiser Firebase - application nulle');
+            }
+        }
+        catch (error) {
+            console.error('❌ Erreur d\'initialisation Firebase:', error.message);
+            if (error.message.includes('no configuration corresponding')) {
+                console.log('📝 Vérifiez que le project_id dans firebase-service-account.json est correct');
+                console.log('📝 Project ID actuel: mapmobile-31594');
+            }
+            throw error;
         }
         const db = (0, firebase_1.getFirestore)();
         const batch = db.batch();
         // 1. Créer les types d'utilisateurs
         console.log('📁 Création de la collection TypeUser...');
         const typeUsersData = [
-            { id: 'type_visiteur', libelle: 'Visiteur' },
-            { id: 'type_utilisateur', libelle: 'Utilisateur' },
-            { id: 'type_manager', libelle: 'Manager' }
+            { id: 1, libelle: 'Visiteur' },
+            { id: 2, libelle: 'Utilisateur' },
+            { id: 3, libelle: 'Manager' }
         ];
         typeUsersData.forEach(typeUser => {
-            const ref = db.collection('TypeUser').doc(typeUser.id);
+            const ref = db.collection('TypeUser').doc(typeUser.id.toString());
             batch.set(ref, typeUser);
         });
         // 2. Créer les statuts
         console.log('📁 Création de la collection Status...');
         const statusData = [
-            { id: 'status_nouveau', libelle: 'Nouveau', couleur: '#FF0000' },
-            { id: 'status_en_cours', libelle: 'En cours', couleur: '#FFA500' },
-            { id: 'status_termine', libelle: 'Terminé', couleur: '#00FF00' }
+            { id: 1, libelle: 'Nouveau', couleur: '#FF0000' },
+            { id: 2, libelle: 'En cours', couleur: '#FFA500' },
+            { id: 3, libelle: 'Terminé', couleur: '#00FF00' }
         ];
         statusData.forEach(status => {
-            const ref = db.collection('Status').doc(status.id);
+            const ref = db.collection('Status').doc(status.id.toString());
             batch.set(ref, status);
         });
         // 3. Créer les paramètres par type d'utilisateur
         console.log('📁 Création de la collection Parametre...');
         const parametresData = [
             {
-                id: 'param_visiteur',
+                id: 1,
                 nom: 'Paramètres Visiteur',
                 limite_tentatives: 3,
                 duree_session: 3600,
-                id_type_user: 'type_visiteur'
+                id_type_user: 1
             },
             {
-                id: 'param_utilisateur',
+                id: 2,
                 nom: 'Paramètres Utilisateur',
                 limite_tentatives: 3,
                 duree_session: 7200,
-                id_type_user: 'type_utilisateur'
+                id_type_user: 2
             },
             {
-                id: 'param_manager',
+                id: 3,
                 nom: 'Paramètres Manager',
                 limite_tentatives: 5,
                 duree_session: 14400,
-                id_type_user: 'type_manager'
+                id_type_user: 3
             }
         ];
         parametresData.forEach(parametre => {
-            const ref = db.collection('Parametre').doc(parametre.id);
+            const ref = db.collection('Parametre').doc(parametre.id.toString());
             batch.set(ref, parametre);
         });
         // 4. Créer les entreprises
         console.log('📁 Création de la collection Entreprise...');
         const entreprisesData = [
             {
-                id: 'entreprise_municipal',
+                id: 1,
                 nom: 'Entreprise Municipal',
                 telephone: '+261 20 22 123 45',
                 email: 'municipal@antananarivo.mg',
@@ -118,25 +134,25 @@ async function initializeAllFirebaseCollections() {
             }
         ];
         entreprisesData.forEach(entreprise => {
-            const ref = db.collection('Entreprise').doc(entreprise.id);
+            const ref = db.collection('Entreprise').doc(entreprise.id.toString());
             batch.set(ref, entreprise);
         });
         // 5. Créer l'utilisateur Manager par défaut
         console.log('📁 Création de la collection User_...');
         const usersData = [
             {
-                id: 'user_admin_manager',
+                id: 1,
                 nom: 'Admin',
                 prenom: 'Manager',
-                email: 'manager@travaux.mg',
-                password: '$2b$10$N9qo8uLOickgx2ZMRZoMye5jZNvhkVOOYuC7a8h5Ggq.LJaFdW.bO', // admin123
+                email: 'manager@manager.mg',
+                password: 'admin', // Mot de passe en clair
                 date_creation: admin.firestore.Timestamp.now(),
                 est_bloque: false,
-                id_type_user: 'type_manager'
+                id_type_user: 3
             }
         ];
         usersData.forEach(user => {
-            const ref = db.collection('User_').doc(user.id);
+            const ref = db.collection('User_').doc(user.id.toString());
             batch.set(ref, user);
         });
         // Exécuter le batch pour les collections de base

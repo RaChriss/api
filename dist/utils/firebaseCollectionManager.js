@@ -97,56 +97,61 @@ class FirebaseCollectionManager {
     }
     /**
      * Crée toutes les collections de base avec leurs données initiales
+     * IDENTIQUE à PostgreSQL avec des IDs numériques
      */
     async createAllBaseCollections() {
         console.log('🚀 Création de toutes les collections de base...');
-        // Types d'utilisateurs
+        // Types d'utilisateurs (IDs numériques comme PostgreSQL)
         await this.createCollection('TypeUser', [
-            { id: 'type_visiteur', data: { libelle: 'Visiteur' } },
-            { id: 'type_utilisateur', data: { libelle: 'Utilisateur' } },
-            { id: 'type_manager', data: { libelle: 'Manager' } }
+            { id: '1', data: { id: 1, libelle: 'Visiteur' } },
+            { id: '2', data: { id: 2, libelle: 'Utilisateur' } },
+            { id: '3', data: { id: 3, libelle: 'Manager' } }
         ]);
-        // Statuts
+        // Statuts (IDs numériques comme PostgreSQL)
         await this.createCollection('Status', [
-            { id: 'status_nouveau', data: { libelle: 'Nouveau', couleur: '#FF0000' } },
-            { id: 'status_en_cours', data: { libelle: 'En cours', couleur: '#FFA500' } },
-            { id: 'status_termine', data: { libelle: 'Terminé', couleur: '#00FF00' } }
+            { id: '1', data: { id: 1, libelle: 'Nouveau', couleur: '#FF0000' } },
+            { id: '2', data: { id: 2, libelle: 'En cours', couleur: '#FFA500' } },
+            { id: '3', data: { id: 3, libelle: 'Terminé', couleur: '#00FF00' } }
         ]);
-        // Paramètres
+        // Paramètres (IDs numériques comme PostgreSQL)
         await this.createCollection('Parametre', [
             {
-                id: 'param_visiteur',
+                id: '1',
                 data: {
+                    id: 1,
                     nom: 'Paramètres Visiteur',
                     limite_tentatives: 3,
                     duree_session: 3600,
-                    id_type_user: 'type_visiteur'
+                    id_type_user: 1
                 }
             },
             {
-                id: 'param_utilisateur',
+                id: '2',
                 data: {
+                    id: 2,
                     nom: 'Paramètres Utilisateur',
                     limite_tentatives: 3,
                     duree_session: 7200,
-                    id_type_user: 'type_utilisateur'
+                    id_type_user: 2
                 }
             },
             {
-                id: 'param_manager',
+                id: '3',
                 data: {
+                    id: 3,
                     nom: 'Paramètres Manager',
                     limite_tentatives: 5,
                     duree_session: 14400,
-                    id_type_user: 'type_manager'
+                    id_type_user: 3
                 }
             }
         ]);
-        // Entreprises
+        // Entreprises (IDs numériques comme PostgreSQL)
         await this.createCollection('Entreprise', [
             {
-                id: 'entreprise_municipal',
+                id: '1',
                 data: {
+                    id: 1,
                     nom: 'Entreprise Municipal',
                     telephone: '+261 20 22 123 45',
                     email: 'municipal@antananarivo.mg',
@@ -154,18 +159,19 @@ class FirebaseCollectionManager {
                 }
             }
         ]);
-        // Utilisateurs par défaut
+        // Utilisateurs par défaut (IDs numériques comme PostgreSQL)
         await this.createCollection('User_', [
             {
-                id: 'user_admin_manager',
+                id: '1',
                 data: {
+                    id: 1,
                     nom: 'Admin',
                     prenom: 'Manager',
-                    email: 'manager@travaux.mg',
-                    password: '$2b$10$N9qo8uLOickgx2ZMRZoMye5jZNvhkVOOYuC7a8h5Ggq.LJaFdW.bO',
+                    email: 'manager@manager.mg',
+                    password: 'admin', // Mot de passe en clair
                     date_creation: admin.firestore.Timestamp.now(),
                     est_bloque: false,
-                    id_type_user: 'type_manager'
+                    id_type_user: 3
                 }
             }
         ]);
@@ -240,49 +246,53 @@ class FirebaseCollectionManager {
     }
     /**
      * Ajoute des données d'exemple pour les tests
+     * IDENTIQUE à PostgreSQL avec des IDs numériques
      */
     async addSampleData() {
         console.log('📝 Ajout de données d\'exemple...');
-        // Ajouter des signalements d'exemple
+        // Ajouter des signalements d'exemple (IDs numériques)
         await this.createCollection('Signalement', [
             {
-                id: 'signalement_1',
+                id: '1',
                 data: {
+                    id: 1,
                     description: 'Nid de poule sur la route principale',
                     location: new admin.firestore.GeoPoint(-18.8792, 47.5079),
                     date_signalement: admin.firestore.Timestamp.now(),
                     est_synchronise: true,
-                    id_user: 'user_admin_manager',
-                    id_status: 'status_nouveau'
+                    id_user: 1,
+                    id_status: 1
                 }
             },
             {
-                id: 'signalement_2',
+                id: '2',
                 data: {
+                    id: 2,
                     description: 'Affaissement de chaussée',
                     location: new admin.firestore.GeoPoint(-18.8800, 47.5090),
                     date_signalement: admin.firestore.Timestamp.now(),
                     est_synchronise: true,
-                    id_user: 'user_admin_manager',
-                    id_status: 'status_en_cours'
+                    id_user: 1,
+                    id_status: 2
                 }
             }
         ]);
-        // Ajouter une réparation d'exemple
+        // Ajouter une réparation d'exemple (IDs numériques)
         await this.createCollection('Reparation', [
             {
-                id: 'reparation_1',
+                id: '1',
                 data: {
+                    id: 1,
                     surface_m2: 15.5,
                     budget: 2500000,
                     date_debut: admin.firestore.Timestamp.fromDate(new Date()),
                     date_fin_prevue: admin.firestore.Timestamp.fromDate(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
                     commentaire: 'Réparation urgente nécessaire',
                     date_creation: admin.firestore.Timestamp.now(),
-                    id_signalement: 'signalement_1',
-                    id_entreprise: 'entreprise_municipal',
-                    id_status: 'status_en_cours',
-                    id_user: 'user_admin_manager'
+                    id_signalement: 1,
+                    id_entreprise: 1,
+                    id_status: 2,
+                    id_user: 1
                 }
             }
         ]);

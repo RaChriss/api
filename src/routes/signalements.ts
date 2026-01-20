@@ -24,9 +24,8 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       SELECT 
         s.id_signalement,
         s.description,
-        s.latitude,
-        s.longitude,
-        s.photo_url,
+        ST_X(s.location) as longitude,
+        ST_Y(s.location) as latitude,
         s.date_signalement,
         st.libelle as status,
         st.couleur as status_couleur,
@@ -56,7 +55,6 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
           latitude: parseFloat(row.latitude),
           longitude: parseFloat(row.longitude)
         },
-        photo_url: row.photo_url,
         date_signalement: row.date_signalement,
         status: row.status,
         status_couleur: row.status_couleur,
@@ -109,9 +107,8 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       SELECT 
         s.id_signalement,
         s.description,
-        s.latitude,
-        s.longitude,
-        s.photo_url,
+        ST_X(s.location) as longitude,
+        ST_Y(s.location) as latitude,
         s.date_signalement,
         st.id_status,
         st.libelle as status,
@@ -156,7 +153,6 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
           latitude: parseFloat(row.latitude),
           longitude: parseFloat(row.longitude)
         },
-        photo_url: row.photo_url,
         date_signalement: row.date_signalement,
         signale_par: `${row.signale_par_prenom} ${row.signale_par_nom}`,
         status: {
@@ -273,7 +269,7 @@ router.get('/stats/recapitulatif', async (req: Request, res: Response): Promise<
  */
 router.post('/', authMiddleware, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { description, latitude, longitude, photo_url } = req.body;
+    const { description, latitude, longitude } = req.body;
     const userId = req.user?.id;
 
     if (!latitude || !longitude) {
@@ -286,16 +282,15 @@ router.post('/', authMiddleware, async (req: Request, res: Response): Promise<vo
 
     // Statut par défaut = Nouveau (id = 1)
     const query = `
-      INSERT INTO Signalement (description, latitude, longitude, photo_url, id_user, id_status, est_synchronise)
-      VALUES ($1, $2, $3, $4, $5, 1, FALSE)
+      INSERT INTO Signalement (description, location, id_user, id_status, est_synchronise)
+      VALUES ($1, ST_GeomFromText('POINT(' || $2 || ' ' || $3 || ')', 4326), $4, 1, FALSE)
       RETURNING id_signalement, date_signalement
     `;
     
     const result = await pool.query(query, [
       description || null,
-      latitude,
       longitude,
-      photo_url || null,
+      latitude,
       userId
     ]);
     

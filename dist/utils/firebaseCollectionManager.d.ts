@@ -26,6 +26,7 @@ export declare class FirebaseCollectionManager {
     }>;
     /**
      * Crée toutes les collections de base avec leurs données initiales
+     * IDENTIQUE à PostgreSQL avec des IDs numériques
      */
     createAllBaseCollections(): Promise<void>;
     /**
@@ -42,6 +43,7 @@ export declare class FirebaseCollectionManager {
     resetAllCollections(): Promise<void>;
     /**
      * Ajoute des données d'exemple pour les tests
+     * IDENTIQUE à PostgreSQL avec des IDs numériques
      */
     addSampleData(): Promise<void>;
 }
