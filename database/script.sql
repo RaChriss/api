@@ -73,9 +73,10 @@ CREATE TABLE Entreprise(
 -- Table des signalements de problèmes routiers (créé par Utilisateur)
 CREATE TABLE Signalement(
    Id_Signalement SERIAL PRIMARY KEY,
-   location geopoint ,     -- photo_url VARCHAR(255),  -- URL ou chemin de la photo
+   location geopoint,
    date_signalement TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-   firebase_id VARCHAR(128),  -- ID du document Firebase
+   description VARCHAR(500),
+   firebase_id VARCHAR(128),
    est_synchronise BOOLEAN DEFAULT FALSE,  -- Synchronisé avec Firebase
    Id_user INT NOT NULL,  -- Utilisateur qui a signalé
    Id_Status INT NOT NULL,  -- Statut de la réparation
@@ -145,9 +146,9 @@ INSERT INTO Parametre (nom, limite_tentatives, duree_session, Id_type_user) VALU
 INSERT INTO Entreprise (nom, telephone, email, adresse) VALUES 
    ('Entreprise Municipal', '+261 20 22 123 45', 'municipal@antananarivo.mg', 'Antananarivo, Madagascar');
 
--- Manager par défaut (mot de passe: admin123 - hash bcrypt)
+-- Manager par défaut (mot de passe: admin123 en clair)
 INSERT INTO User_ (nom, prenom, email, password, Id_type_user) VALUES 
-   ('Admin', 'Manager', 'manager@travaux.mg', '$2b$10$N9qo8uLOickgx2ZMRZoMye5jZNvhkVOOYuC7a8h5Ggq.LJaFdW.bO', 3);
+   ('Admin', 'Manager', 'manager@travaux.mg', 'admin123', 3);
 
 -- ============================================
 -- INDEX POUR PERFORMANCES
@@ -183,7 +184,8 @@ LEFT JOIN Reparation r ON s.Id_Signalement = r.Id_Signalement;
 CREATE VIEW v_signalements_details AS
 SELECT 
    s.Id_Signalement,
-   s.location,
+   ST_X(s.location) as longitude,
+   ST_Y(s.location) as latitude,
    s.date_signalement,
    s.firebase_id,
    s.est_synchronise,
@@ -214,7 +216,8 @@ LEFT JOIN Entreprise e ON rep.Id_Entreprise = e.Id_Entreprise;
 CREATE VIEW v_signalements_non_traites AS
 SELECT 
    s.Id_Signalement,
-   s.location,
+   ST_X(s.location) as longitude,
+   ST_Y(s.location) as latitude,
    s.date_signalement,
    s.firebase_id,
    u.nom as nom_utilisateur,

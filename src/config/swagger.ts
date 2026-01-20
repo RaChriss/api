@@ -75,7 +75,7 @@ API REST pour la gestion des travaux routiers à Antananarivo.
           type: 'object',
           required: ['email', 'password'],
           properties: {
-            email: { type: 'string', format: 'email', example: 'manager@travaux.mg' },
+            email: { type: 'string', format: 'email', example: 'manager@.mg' },
             password: { type: 'string', example: 'admin123' }
           }
         },

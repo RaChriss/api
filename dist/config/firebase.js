@@ -80,6 +80,7 @@ function initializeFirebase() {
         }
         // Initialise Firebase Admin (sans vérifier la connexion)
         const serviceAccount = require(serviceAccountPath);
+        // Configuration avec désactivation de la validation automatique
         const app = admin.initializeApp({
             credential: admin.credential.cert(serviceAccount),
             projectId: process.env.FIREBASE_PROJECT_ID || serviceAccount.project_id,
@@ -113,7 +114,7 @@ async function checkFirebaseConnectionAsync() {
         lastConnectionCheck = Date.now();
     }
     catch (error) {
-        // Ignorer les erreurs de connexion - on passe simplement en mode hors-ligne
+        // Mode silencieux - pas de log d'erreur pour éviter la pollution des logs
         if (firebaseAvailable) {
             console.log('🟠 Firebase non disponible (mode hors-ligne activé)');
         }

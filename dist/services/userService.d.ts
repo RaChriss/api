@@ -31,6 +31,18 @@ export declare class UserService {
      */
     static create(userData: CreateUserDTO): Promise<User>;
     /**
+     * Crée un utilisateur depuis Firebase (mot de passe déjà hashé)
+     * Utilisé pour synchroniser les utilisateurs Firebase vers PostgreSQL
+     */
+    static createFromFirebase(userData: {
+        nom: string;
+        prenom?: string;
+        email: string;
+        password: string;
+        id_type_user: number;
+        firebase_uid?: string;
+    }): Promise<User>;
+    /**
      * Trouve un utilisateur par email
      */
     static findByEmail(email: string): Promise<User | null>;
@@ -64,7 +76,7 @@ export declare class UserService {
      */
     static getBlockedUsers(): Promise<User[]>;
     /**
-     * Vérifie le mot de passe d'un utilisateur
+     * Vérifie le mot de passe d'un utilisateur (comparaison en clair)
      */
     static verifyPassword(user: User, password: string): Promise<boolean>;
     /**
