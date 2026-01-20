@@ -6,9 +6,12 @@ import dotenv from 'dotenv';
 import { initializeFirebase, getFirestore, getAuth } from './config/firebase';
 import { checkConnection } from './config/database';
 import { setupSwagger } from './config/swagger';
+import { connectionMiddleware } from './middleware/connection';
+import { hybridDataService } from './services/hybridDataService';
 import firebaseRoutes from './routes/firebase';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
+import signalementRoutes from './routes/signalements';
 
 // Load environment variables
 dotenv.config();
@@ -49,28 +52,49 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 /**
  * GET /health - Health check endpoint
  */
-app.get('/health', (req: Request, res: Response) => {
+app.get('/health', async (req: Request, res: Response) => {
+  const isFirebaseConnected = hybridDataService.isFirebaseAvailableSync();
+  const syncStatus = await hybridDataService.getSyncStatus();
+  
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
     service: 'Travaux Routiers API',
     version: '1.0.0',
-    environment: nodeEnv
+    environment: nodeEnv,
+    data_sources: {
+      firebase: isFirebaseConnected ? '✅ Connected' : '🔴 Offline',
+      postgres: '✅ Connected',
+      current_mode: isFirebaseConnected ? 'firebase' : 'postgres',
+      sync_status: syncStatus
+    }
   });
 });
 
 /**
  * GET /api - API information and available endpoints
  */
-app.get('/api', (req: Request, res: Response) => {
+app.get('/api', async (req: Request, res: Response) => {
+  const isFirebaseConnected = hybridDataService.isFirebaseAvailableSync();
+  const syncStatus = await hybridDataService.getSyncStatus();
+  
   res.status(200).json({
     service: 'Travaux Routiers API',
     version: '1.0.0',
     description: 'API REST pour la gestion des travaux routiers à Antananarivo',
     documentation: '/api/docs',
-    firebase: {
-      status: firebaseApp ? '✅ Connected' : '⚠️  Not configured',
-      projectId: process.env.FIREBASE_PROJECT_ID || 'Not set'
+    architecture: '🔄 Hybrid Firebase/PostgreSQL',
+    data_sources: {
+      firebase: {
+        status: firebaseApp ? '✅ Connected' : '⚠️  Not configured',
+        projectId: process.env.FIREBASE_PROJECT_ID || 'Not set',
+        online: isFirebaseConnected
+      },
+      postgres: {
+        status: '✅ Connected',
+        pending_sync: syncStatus
+      },
+      current_mode: isFirebaseConnected ? '🔥 Firebase (online)' : '💾 PostgreSQL (offline)'
     },
     endpoints: {
       documentation: 'GET /api/docs',
@@ -126,14 +150,20 @@ app.get('/api', (req: Request, res: Response) => {
 // Documentation Swagger
 setupSwagger(app, port);
 
+// Middleware de connexion globale (après les routes de santé mais avant les routes API)
+app.use('/api', connectionMiddleware);
+
 // Auth routes
 app.use('/api/auth', authRoutes);
 
-// Admin routes
+// Admin routes  
 app.use('/api/admin', adminRoutes);
 
 // Firebase routes
 app.use('/api/firebase', firebaseRoutes);
+
+// Signalements routes
+app.use('/api/signalements', signalementRoutes);
 
 // ============================================
 // Error handling middleware

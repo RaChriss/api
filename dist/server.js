@@ -11,9 +11,12 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const firebase_1 = require("./config/firebase");
 const database_1 = require("./config/database");
 const swagger_1 = require("./config/swagger");
+const connection_1 = require("./middleware/connection");
+const hybridDataService_1 = require("./services/hybridDataService");
 const firebase_2 = __importDefault(require("./routes/firebase"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const admin_1 = __importDefault(require("./routes/admin"));
+const signalements_1 = __importDefault(require("./routes/signalements"));
 // Load environment variables
 dotenv_1.default.config();
 // Initialize Firebase
@@ -44,27 +47,46 @@ app.use(express_1.default.urlencoded({ limit: '10mb', extended: true }));
 /**
  * GET /health - Health check endpoint
  */
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+    const isFirebaseConnected = hybridDataService_1.hybridDataService.isFirebaseAvailable();
+    const syncStatus = await hybridDataService_1.hybridDataService.getSyncStatus();
     res.status(200).json({
         status: 'OK',
         timestamp: new Date().toISOString(),
         service: 'Travaux Routiers API',
         version: '1.0.0',
-        environment: nodeEnv
+        environment: nodeEnv,
+        data_sources: {
+            firebase: isFirebaseConnected ? '✅ Connected' : '🔴 Offline',
+            postgres: '✅ Connected',
+            current_mode: isFirebaseConnected ? 'firebase' : 'postgres',
+            sync_status: syncStatus
+        }
     });
 });
 /**
  * GET /api - API information and available endpoints
  */
-app.get('/api', (req, res) => {
+app.get('/api', async (req, res) => {
+    const isFirebaseConnected = hybridDataService_1.hybridDataService.isFirebaseAvailable();
+    const syncStatus = await hybridDataService_1.hybridDataService.getSyncStatus();
     res.status(200).json({
         service: 'Travaux Routiers API',
         version: '1.0.0',
         description: 'API REST pour la gestion des travaux routiers à Antananarivo',
         documentation: '/api/docs',
-        firebase: {
-            status: firebaseApp ? '✅ Connected' : '⚠️  Not configured',
-            projectId: process.env.FIREBASE_PROJECT_ID || 'Not set'
+        architecture: '🔄 Hybrid Firebase/PostgreSQL',
+        data_sources: {
+            firebase: {
+                status: firebaseApp ? '✅ Connected' : '⚠️  Not configured',
+                projectId: process.env.FIREBASE_PROJECT_ID || 'Not set',
+                online: isFirebaseConnected
+            },
+            postgres: {
+                status: '✅ Connected',
+                pending_sync: syncStatus
+            },
+            current_mode: isFirebaseConnected ? '🔥 Firebase (online)' : '💾 PostgreSQL (offline)'
         },
         endpoints: {
             documentation: 'GET /api/docs',
@@ -117,12 +139,16 @@ app.get('/api', (req, res) => {
 // ============================================
 // Documentation Swagger
 (0, swagger_1.setupSwagger)(app, port);
+// Middleware de connexion globale (après les routes de santé mais avant les routes API)
+app.use('/api', connection_1.connectionMiddleware);
 // Auth routes
 app.use('/api/auth', auth_1.default);
-// Admin routes
+// Admin routes  
 app.use('/api/admin', admin_1.default);
 // Firebase routes
 app.use('/api/firebase', firebase_2.default);
+// Signalements routes
+app.use('/api/signalements', signalements_1.default);
 app.use((err, req, res, next) => {
     console.error('Error:', err);
     const status = err.status || 500;

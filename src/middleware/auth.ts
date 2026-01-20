@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import SessionService from '../services/sessionService';
 import UserService from '../services/userService';
+import { hybridDataService } from '../services/hybridDataService';
 
 // Étend l'interface Request pour inclure l'utilisateur
 declare global {
@@ -18,6 +19,8 @@ declare global {
         token: string;
         expires_at: Date;
       };
+      dataMode?: 'firebase' | 'postgres';
+      isOnline?: boolean;
     }
   }
 }

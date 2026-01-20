@@ -34,6 +34,8 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.initializeFirebase = initializeFirebase;
+exports.isFirebaseOnline = isFirebaseOnline;
+exports.getFirebaseStatus = getFirebaseStatus;
 exports.getFirebaseApp = getFirebaseApp;
 exports.getFirestore = getFirestore;
 exports.getAuth = getAuth;
@@ -41,6 +43,11 @@ exports.getDatabase = getDatabase;
 const admin = __importStar(require("firebase-admin"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+// État global de Firebase
+let firebaseInitialized = false;
+let firebaseAvailable = false;
+let lastConnectionCheck = 0;
+const CONNECTION_CHECK_INTERVAL = 30000; // 30 secondes
 /**
  * Initialise Firebase Admin SDK
  * Requiert un fichier firebase-service-account.json à la racine du projet API
@@ -51,6 +58,7 @@ function initializeFirebase() {
         try {
             const existingApp = admin.app();
             if (existingApp) {
+                firebaseInitialized = true;
                 console.log('✅ Firebase Admin SDK déjà initialisé');
                 return existingApp;
             }
@@ -70,19 +78,74 @@ function initializeFirebase() {
             console.warn('3. Save the JSON file as "firebase-service-account.json" in the api folder');
             return null;
         }
-        // Initialise Firebase Admin
+        // Initialise Firebase Admin (sans vérifier la connexion)
         const serviceAccount = require(serviceAccountPath);
         const app = admin.initializeApp({
             credential: admin.credential.cert(serviceAccount),
             projectId: process.env.FIREBASE_PROJECT_ID || serviceAccount.project_id,
         });
-        console.log('✅ Firebase Admin SDK initialized successfully');
+        firebaseInitialized = true;
+        console.log('✅ Firebase Admin SDK initialisé (mode hybride activé)');
+        // Vérifier la connexion en arrière-plan (sans bloquer)
+        checkFirebaseConnectionAsync();
         return app;
     }
     catch (error) {
         console.error('❌ Error initializing Firebase Admin:', error);
         return null;
     }
+}
+/**
+ * Vérifie la connexion Firebase de manière asynchrone (non-bloquante)
+ */
+async function checkFirebaseConnectionAsync() {
+    try {
+        // Test simple de connexion Firestore
+        const testDoc = admin.firestore().collection('_health').doc('ping');
+        await testDoc.set({
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            source: 'api-server'
+        }, { merge: true });
+        if (!firebaseAvailable) {
+            console.log('🟢 Firebase connecté (mode en ligne)');
+        }
+        firebaseAvailable = true;
+        lastConnectionCheck = Date.now();
+    }
+    catch (error) {
+        // Ignorer les erreurs de connexion - on passe simplement en mode hors-ligne
+        if (firebaseAvailable) {
+            console.log('🟠 Firebase non disponible (mode hors-ligne activé)');
+        }
+        firebaseAvailable = false;
+        lastConnectionCheck = Date.now();
+    }
+}
+/**
+ * Vérifie si Firebase est disponible (avec cache de 30 secondes)
+ */
+async function isFirebaseOnline() {
+    if (!firebaseInitialized) {
+        return false;
+    }
+    // Utiliser le cache si la dernière vérification est récente
+    const now = Date.now();
+    if (now - lastConnectionCheck < CONNECTION_CHECK_INTERVAL) {
+        return firebaseAvailable;
+    }
+    // Vérification en arrière-plan
+    checkFirebaseConnectionAsync();
+    return firebaseAvailable;
+}
+/**
+ * Retourne l'état actuel de Firebase (sans nouvelle vérification)
+ */
+function getFirebaseStatus() {
+    return {
+        initialized: firebaseInitialized,
+        available: firebaseAvailable,
+        lastCheck: lastConnectionCheck
+    };
 }
 /**
  * Obtient l'instance Firebase Admin

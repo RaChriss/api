@@ -5,6 +5,18 @@ import * as admin from 'firebase-admin';
  */
 export declare function initializeFirebase(): admin.app.App | null;
 /**
+ * Vérifie si Firebase est disponible (avec cache de 30 secondes)
+ */
+export declare function isFirebaseOnline(): Promise<boolean>;
+/**
+ * Retourne l'état actuel de Firebase (sans nouvelle vérification)
+ */
+export declare function getFirebaseStatus(): {
+    initialized: boolean;
+    available: boolean;
+    lastCheck: number;
+};
+/**
  * Obtient l'instance Firebase Admin
  */
 export declare function getFirebaseApp(): typeof admin;
