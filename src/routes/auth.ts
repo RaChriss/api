@@ -249,7 +249,7 @@ router.post('/login',
           console.log(`⚠️ Erreur Firestore, fallback PostgreSQL: ${error}`);
           // Fallback vers PostgreSQL si erreur Firestore
           user = await UserService.findByEmail(email);
-          if (user) {
+          if (user && user.password) {
             passwordFromDb = user.password;
           }
         }
@@ -257,7 +257,7 @@ router.post('/login',
         // ===== MODE HORS LIGNE: Chercher dans PostgreSQL =====
         console.log('📴 Mode hors ligne - Recherche dans PostgreSQL...');
         user = await UserService.findByEmail(email);
-        if (user) {
+        if (user && user.password) {
           passwordFromDb = user.password;
         }
       }
