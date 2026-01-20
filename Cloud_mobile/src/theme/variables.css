@@ -1,2 +1,105 @@
-/* For information on how to create your own theme, please refer to:
-https://ionicframework.com/docs/theming/ */
+/**
+ * Thème personnalisé - Travaux Routiers Antananarivo
+ * Palette: Bleu marine / Rouge / Orange / Vert
+ */
+
+:root {
+  /* Primary - Bleu marine professionnel */
+  --ion-color-primary: #16213e;
+  --ion-color-primary-rgb: 22, 33, 62;
+  --ion-color-primary-contrast: #ffffff;
+  --ion-color-primary-contrast-rgb: 255, 255, 255;
+  --ion-color-primary-shade: #0f1729;
+  --ion-color-primary-tint: #2d3751;
+
+  /* Secondary - Bleu clair */
+  --ion-color-secondary: #0f3460;
+  --ion-color-secondary-rgb: 15, 52, 96;
+  --ion-color-secondary-contrast: #ffffff;
+  --ion-color-secondary-contrast-rgb: 255, 255, 255;
+  --ion-color-secondary-shade: #0d2e54;
+  --ion-color-secondary-tint: #274870;
+
+  /* Tertiary - Violet */
+  --ion-color-tertiary: #5260ff;
+  --ion-color-tertiary-rgb: 82, 96, 255;
+  --ion-color-tertiary-contrast: #ffffff;
+  --ion-color-tertiary-contrast-rgb: 255, 255, 255;
+  --ion-color-tertiary-shade: #4854e0;
+  --ion-color-tertiary-tint: #6370ff;
+
+  /* Success - Vert (Terminé) */
+  --ion-color-success: #00c853;
+  --ion-color-success-rgb: 0, 200, 83;
+  --ion-color-success-contrast: #ffffff;
+  --ion-color-success-contrast-rgb: 255, 255, 255;
+  --ion-color-success-shade: #00b049;
+  --ion-color-success-tint: #1acd64;
+
+  /* Warning - Orange (En cours) */
+  --ion-color-warning: #ff9800;
+  --ion-color-warning-rgb: 255, 152, 0;
+  --ion-color-warning-contrast: #000000;
+  --ion-color-warning-contrast-rgb: 0, 0, 0;
+  --ion-color-warning-shade: #e08600;
+  --ion-color-warning-tint: #ffa21a;
+
+  /* Danger - Rouge (Nouveau) */
+  --ion-color-danger: #e94560;
+  --ion-color-danger-rgb: 233, 69, 96;
+  --ion-color-danger-contrast: #ffffff;
+  --ion-color-danger-contrast-rgb: 255, 255, 255;
+  --ion-color-danger-shade: #cd3d54;
+  --ion-color-danger-tint: #eb5870;
+
+  /* Medium */
+  --ion-color-medium: #92949c;
+  --ion-color-medium-rgb: 146, 148, 156;
+  --ion-color-medium-contrast: #ffffff;
+  --ion-color-medium-contrast-rgb: 255, 255, 255;
+  --ion-color-medium-shade: #808289;
+  --ion-color-medium-tint: #9d9fa6;
+
+  /* Light */
+  --ion-color-light: #f4f5f8;
+  --ion-color-light-rgb: 244, 245, 248;
+  --ion-color-light-contrast: #000000;
+  --ion-color-light-contrast-rgb: 0, 0, 0;
+  --ion-color-light-shade: #d7d8da;
+  --ion-color-light-tint: #f5f6f9;
+}
+
+/* Styles globaux */
+ion-content {
+  --background: #f8f9fa;
+}
+
+ion-toolbar {
+  --background: var(--ion-color-primary);
+  --color: white;
+}
+
+ion-card {
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+ion-button {
+  --border-radius: 12px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+ion-chip {
+  --border-radius: 20px;
+}
+
+/* Leaflet popup styles */
+.leaflet-popup-content-wrapper {
+  border-radius: 12px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important;
+}
+
+.leaflet-popup-tip {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important;
+}
