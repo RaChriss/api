@@ -1,11 +1,7 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.UserService = void 0;
 const database_1 = require("../config/database");
-const bcryptjs_1 = __importDefault(require("bcryptjs"));
 /**
  * Service de gestion des utilisateurs
  */
@@ -14,17 +10,35 @@ class UserService {
      * Crée un nouvel utilisateur
      */
     static async create(userData) {
-        // Hash du mot de passe
-        const hashedPassword = await bcryptjs_1.default.hash(userData.password, 10);
+        // Mot de passe stocké en clair (développement)
         const result = await (0, database_1.query)(`INSERT INTO User_ (nom, prenom, email, password, id_type_user, date_creation, est_bloque)
        VALUES ($1, $2, $3, $4, $5, NOW(), FALSE)
        RETURNING id_user, nom, prenom, email, date_creation, est_bloque, id_type_user`, [
             userData.nom,
             userData.prenom || null,
             userData.email,
-            hashedPassword,
+            userData.password,
             userData.id_type_user || 2 // Par défaut: Utilisateur
         ]);
+        return result.rows[0];
+    }
+    /**
+     * Crée un utilisateur depuis Firebase (mot de passe déjà hashé)
+     * Utilisé pour synchroniser les utilisateurs Firebase vers PostgreSQL
+     */
+    static async createFromFirebase(userData) {
+        // NE PAS re-hasher le mot de passe - il vient de Firebase déjà hashé
+        const result = await (0, database_1.query)(`INSERT INTO User_ (nom, prenom, email, password, id_type_user, firebase_uid, date_creation, est_bloque)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), FALSE)
+       RETURNING id_user, nom, prenom, email, date_creation, est_bloque, id_type_user, firebase_uid`, [
+            userData.nom,
+            userData.prenom || null,
+            userData.email,
+            userData.password, // Déjà hashé
+            userData.id_type_user,
+            userData.firebase_uid || null
+        ]);
+        console.log(`✅ Utilisateur créé depuis Firebase: ${userData.email}`);
         return result.rows[0];
     }
     /**
@@ -71,9 +85,8 @@ class UserService {
             values.push(userData.email);
         }
         if (userData.password !== undefined) {
-            const hashedPassword = await bcryptjs_1.default.hash(userData.password, 10);
             updates.push(`password = $${paramIndex++}`);
-            values.push(hashedPassword);
+            values.push(userData.password);
         }
         if (updates.length === 0) {
             return this.findById(id);
@@ -121,12 +134,12 @@ class UserService {
         return result.rows;
     }
     /**
-     * Vérifie le mot de passe d'un utilisateur
+     * Vérifie le mot de passe d'un utilisateur (comparaison en clair)
      */
     static async verifyPassword(user, password) {
         if (!user.password)
             return false;
-        return bcryptjs_1.default.compare(password, user.password);
+        return user.password === password;
     }
     /**
      * Liste tous les utilisateurs

@@ -77,7 +77,7 @@ npm run firebase-clear
 
 ## 👤 Utilisateur par défaut
 
-**Email** : `manager@travaux.mg`  
+**Email** : `manager@manager.mg`  
 **Mot de passe** : `admin123`  
 **Type** : Manager  
 

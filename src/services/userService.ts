@@ -1,5 +1,5 @@
 import { query } from '../config/database';
-import bcrypt from 'bcryptjs';
+// Mot de passe en clair pour le développement
 
 export interface User {
   id_user: number;
@@ -37,9 +37,7 @@ export class UserService {
    * Crée un nouvel utilisateur
    */
   static async create(userData: CreateUserDTO): Promise<User> {
-    // Hash du mot de passe
-    const hashedPassword = await bcrypt.hash(userData.password, 10);
-    
+    // Mot de passe stocké en clair (développement)
     const result = await query(
       `INSERT INTO User_ (nom, prenom, email, password, id_type_user, date_creation, est_bloque)
        VALUES ($1, $2, $3, $4, $5, NOW(), FALSE)
@@ -48,11 +46,42 @@ export class UserService {
         userData.nom,
         userData.prenom || null,
         userData.email,
-        hashedPassword,
+        userData.password,
         userData.id_type_user || 2 // Par défaut: Utilisateur
       ]
     );
     
+    return result.rows[0];
+  }
+
+  /**
+   * Crée un utilisateur depuis Firebase (mot de passe déjà hashé)
+   * Utilisé pour synchroniser les utilisateurs Firebase vers PostgreSQL
+   */
+  static async createFromFirebase(userData: {
+    nom: string;
+    prenom?: string;
+    email: string;
+    password: string; // Déjà hashé depuis Firebase
+    id_type_user: number;
+    firebase_uid?: string;
+  }): Promise<User> {
+    // NE PAS re-hasher le mot de passe - il vient de Firebase déjà hashé
+    const result = await query(
+      `INSERT INTO User_ (nom, prenom, email, password, id_type_user, firebase_uid, date_creation, est_bloque)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), FALSE)
+       RETURNING id_user, nom, prenom, email, date_creation, est_bloque, id_type_user, firebase_uid`,
+      [
+        userData.nom,
+        userData.prenom || null,
+        userData.email,
+        userData.password, // Déjà hashé
+        userData.id_type_user,
+        userData.firebase_uid || null
+      ]
+    );
+    
+    console.log(`✅ Utilisateur créé depuis Firebase: ${userData.email}`);
     return result.rows[0];
   }
 
@@ -113,9 +142,8 @@ export class UserService {
       values.push(userData.email);
     }
     if (userData.password !== undefined) {
-      const hashedPassword = await bcrypt.hash(userData.password, 10);
       updates.push(`password = $${paramIndex++}`);
-      values.push(hashedPassword);
+      values.push(userData.password);
     }
 
     if (updates.length === 0) {
@@ -187,11 +215,11 @@ export class UserService {
   }
 
   /**
-   * Vérifie le mot de passe d'un utilisateur
+   * Vérifie le mot de passe d'un utilisateur (comparaison en clair)
    */
   static async verifyPassword(user: User, password: string): Promise<boolean> {
     if (!user.password) return false;
-    return bcrypt.compare(password, user.password);
+    return user.password === password;
   }
 
   /**

@@ -492,7 +492,7 @@ router.post('/sessions/cleanup', auth_1.authMiddleware, auth_1.managerMiddleware
 router.get('/sync/status', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
     try {
         const syncStatus = await hybridDataService_1.hybridDataService.getSyncStatus();
-        const isFirebaseConnected = hybridDataService_1.hybridDataService.isFirebaseAvailable();
+        const isFirebaseConnected = hybridDataService_1.hybridDataService.isFirebaseAvailableSync();
         res.status(200).json({
             success: true,
             firebase_connected: isFirebaseConnected,

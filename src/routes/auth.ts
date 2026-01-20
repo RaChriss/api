@@ -5,7 +5,7 @@ import LoginAttemptService from '../services/loginAttemptService';
 import SessionService from '../services/sessionService';
 import { hybridDataService } from '../services/hybridDataService';
 import { connectionMiddleware } from '../middleware/connection';
-import { getAuth } from '../config/firebase';
+import { getAuth, getFirestore } from '../config/firebase';
 import { getUserTypeName } from '../utils/userTypes';
 
 const router = Router();
@@ -88,22 +88,28 @@ router.post('/register',
         id_type_user: 2 // Utilisateur par défaut
       });
 
-      // Essayer de créer l'utilisateur dans Firebase (si connecté)
-      try {
-        const auth = getAuth();
-        const firebaseUser = await auth.createUser({
-          email,
-          password,
-          displayName: `${prenom || ''} ${nom}`.trim()
-        });
-        
-        // Mettre à jour le firebase_uid dans PostgreSQL
-        await UserService.updateFirebaseUid(user.id_user, firebaseUser.uid);
-        
-        console.log('✅ Utilisateur créé dans Firebase:', firebaseUser.uid);
-      } catch (firebaseError: any) {
-        console.warn('⚠️ Création Firebase échouée (mode hors-ligne):', firebaseError.message);
-        // Continuer même si Firebase échoue
+      // Essayer de créer l'utilisateur dans Firebase Firestore (si connecté)
+      if (await hybridDataService.isFirebaseAvailable()) {
+        try {
+          const db = getFirestore();
+          
+          // Créer dans Firestore (collection User_)
+          await db.collection('User_').doc(user.id_user.toString()).set({
+            id: user.id_user,
+            nom,
+            prenom: prenom || '',
+            email,
+            password, // Mot de passe en clair
+            date_creation: new Date(),
+            est_bloque: false,
+            id_type_user: 2
+          });
+          
+          console.log('✅ Utilisateur créé dans Firebase Firestore:', user.id_user);
+        } catch (firebaseError: any) {
+          console.log('⚠️ Erreur création Firebase:', firebaseError.message);
+          // Continuer même si Firebase échoue
+        }
       }
 
       res.status(201).json({
@@ -147,7 +153,7 @@ router.post('/register',
  *               email:
  *                 type: string
  *                 format: email
- *                 example: "manager@travaux.mg"
+ *                 example: "manager@manager.mg"
  *               password:
  *                 type: string
  *                 example: "admin123"
@@ -178,8 +184,84 @@ router.post('/login',
       const { email, password } = req.body;
       const clientIp = req.ip || req.socket.remoteAddress;
 
-      // Trouver l'utilisateur
-      const user = await UserService.findByEmail(email);
+      let user = null;
+      let passwordFromDb = '';
+
+      // Mode hybride: En ligne = Firestore, Hors ligne = PostgreSQL
+      const isOnline = await hybridDataService.isFirebaseAvailable();
+      
+      if (isOnline) {
+        // ===== MODE EN LIGNE: Chercher dans Firestore =====
+        console.log('🌐 Mode en ligne - Recherche dans Firestore...');
+        try {
+          const db = getFirestore();
+          const usersRef = db.collection('User_');
+          const snapshot = await usersRef.where('email', '==', email).get();
+          
+          if (!snapshot.empty) {
+            const firebaseUser = snapshot.docs[0].data();
+            console.log(`🔍 Utilisateur trouvé dans Firestore: ${email}`);
+            
+            // Convertir id_type_user si c'est un string (anciennes données)
+            let idTypeUser = firebaseUser.id_type_user;
+            if (typeof idTypeUser === 'string') {
+              const typeMapping: { [key: string]: number } = {
+                'type_visiteur': 1,
+                'type_utilisateur': 2,
+                'type_manager': 3
+              };
+              idTypeUser = typeMapping[idTypeUser] || 2;
+            }
+            
+            // Stocker le mot de passe pour vérification
+            passwordFromDb = firebaseUser.password;
+            
+            // Construire l'objet user depuis Firestore
+            user = {
+              id_user: firebaseUser.id || parseInt(snapshot.docs[0].id),
+              nom: firebaseUser.nom,
+              prenom: firebaseUser.prenom,
+              email: firebaseUser.email,
+              id_type_user: idTypeUser,
+              est_bloque: firebaseUser.est_bloque || false,
+              date_creation: firebaseUser.date_creation
+            };
+            
+            // Aussi synchroniser vers PostgreSQL (cache local)
+            const existingLocal = await UserService.findByEmail(email);
+            if (!existingLocal) {
+              try {
+                await UserService.createFromFirebase({
+                  nom: firebaseUser.nom,
+                  prenom: firebaseUser.prenom,
+                  email: firebaseUser.email,
+                  password: firebaseUser.password,
+                  id_type_user: idTypeUser,
+                  firebase_uid: firebaseUser.firebase_uid
+                });
+                console.log(`✅ Utilisateur synchronisé vers PostgreSQL (cache local)`);
+              } catch (syncError) {
+                console.log(`⚠️ Erreur sync PostgreSQL: ${syncError}`);
+              }
+            }
+          }
+        } catch (error) {
+          console.log(`⚠️ Erreur Firestore, fallback PostgreSQL: ${error}`);
+          // Fallback vers PostgreSQL si erreur Firestore
+          user = await UserService.findByEmail(email);
+          if (user) {
+            passwordFromDb = user.password;
+          }
+        }
+      } else {
+        // ===== MODE HORS LIGNE: Chercher dans PostgreSQL =====
+        console.log('📴 Mode hors ligne - Recherche dans PostgreSQL...');
+        user = await UserService.findByEmail(email);
+        if (user) {
+          passwordFromDb = user.password;
+        }
+      }
+      
       if (!user) {
         res.status(401).json({
           success: false,
@@ -197,8 +279,9 @@ router.post('/login',
         return;
       }
 
-      // Vérifier le mot de passe
-      const isValidPassword = await UserService.verifyPassword(user, password);
+      // Vérifier le mot de passe (comparaison directe en texte clair)
+      const isValidPassword = password === passwordFromDb;
+      console.log(`🔐 Vérification mot de passe: ${isValidPassword ? '✅ Correct' : '❌ Incorrect'}`);
       
       if (!isValidPassword) {
         // Enregistrer la tentative échouée
