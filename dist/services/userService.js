@@ -11,7 +11,7 @@ class UserService {
      */
     static async create(userData) {
         // Mot de passe stocké en clair (développement)
-        const result = await (0, database_1.query)(`INSERT INTO User_ (nom, prenom, email, password, id_type_user, date_creation, est_bloque)
+        const result = await (0, database_1.query)(`INSERT INTO user_ (nom, prenom, email, password, id_type_user, date_creation, est_bloque)
        VALUES ($1, $2, $3, $4, $5, NOW(), FALSE)
        RETURNING id_user, nom, prenom, email, date_creation, est_bloque, id_type_user`, [
             userData.nom,
@@ -28,7 +28,7 @@ class UserService {
      */
     static async createFromFirebase(userData) {
         // NE PAS re-hasher le mot de passe - il vient de Firebase déjà hashé
-        const result = await (0, database_1.query)(`INSERT INTO User_ (nom, prenom, email, password, id_type_user, firebase_uid, date_creation, est_bloque)
+        const result = await (0, database_1.query)(`INSERT INTO user_ (nom, prenom, email, password, id_type_user, firebase_uid, date_creation, est_bloque)
        VALUES ($1, $2, $3, $4, $5, $6, NOW(), FALSE)
        RETURNING id_user, nom, prenom, email, date_creation, est_bloque, id_type_user, firebase_uid`, [
             userData.nom,
@@ -46,7 +46,7 @@ class UserService {
      */
     static async findByEmail(email) {
         const result = await (0, database_1.query)(`SELECT id_user, nom, prenom, email, password, firebase_uid, date_creation, est_bloque, id_type_user
-       FROM User_ WHERE email = $1`, [email]);
+       FROM user_ WHERE email = $1`, [email]);
         return result.rows[0] || null;
     }
     /**
@@ -54,7 +54,7 @@ class UserService {
      */
     static async findById(id) {
         const result = await (0, database_1.query)(`SELECT id_user, nom, prenom, email, firebase_uid, date_creation, est_bloque, id_type_user
-       FROM User_ WHERE id_user = $1`, [id]);
+       FROM user_ WHERE id_user = $1`, [id]);
         return result.rows[0] || null;
     }
     /**
@@ -62,7 +62,7 @@ class UserService {
      */
     static async findByFirebaseUid(firebaseUid) {
         const result = await (0, database_1.query)(`SELECT id_user, nom, prenom, email, firebase_uid, date_creation, est_bloque, id_type_user
-       FROM User_ WHERE firebase_uid = $1`, [firebaseUid]);
+       FROM user_ WHERE firebase_uid = $1`, [firebaseUid]);
         return result.rows[0] || null;
     }
     /**
@@ -92,7 +92,7 @@ class UserService {
             return this.findById(id);
         }
         values.push(id);
-        const result = await (0, database_1.query)(`UPDATE User_ SET ${updates.join(', ')}
+        const result = await (0, database_1.query)(`UPDATE user_ SET ${updates.join(', ')}
        WHERE id_user = $${paramIndex}
        RETURNING id_user, nom, prenom, email, firebase_uid, date_creation, est_bloque, id_type_user`, values);
         return result.rows[0] || null;
@@ -101,7 +101,7 @@ class UserService {
      * Met à jour le Firebase UID d'un utilisateur
      */
     static async updateFirebaseUid(id, firebaseUid) {
-        await (0, database_1.query)(`UPDATE User_ SET firebase_uid = $1 WHERE id_user = $2`, [firebaseUid, id]);
+        await (0, database_1.query)(`UPDATE user_ SET firebase_uid = $1 WHERE id_user = $2`, [firebaseUid, id]);
     }
     /**
      * Bloque un utilisateur
@@ -117,20 +117,20 @@ class UserService {
         if (user.id_type_user === 3) {
             throw new Error('Les managers ne peuvent pas être bloqués');
         }
-        await (0, database_1.query)(`UPDATE User_ SET est_bloque = TRUE WHERE id_user = $1 AND id_type_user != 3`, [id]);
+        await (0, database_1.query)(`UPDATE user_ SET est_bloque = TRUE WHERE id_user = $1 AND id_type_user != 3`, [id]);
     }
     /**
      * Débloque un utilisateur
      */
     static async unblockUser(id) {
-        await (0, database_1.query)(`UPDATE User_ SET est_bloque = FALSE WHERE id_user = $1`, [id]);
+        await (0, database_1.query)(`UPDATE user_ SET est_bloque = FALSE WHERE id_user = $1`, [id]);
     }
     /**
      * Liste tous les utilisateurs bloqués
      */
     static async getBlockedUsers() {
         const result = await (0, database_1.query)(`SELECT id_user, nom, prenom, email, firebase_uid, date_creation, est_bloque, id_type_user
-       FROM User_ WHERE est_bloque = TRUE`);
+       FROM user_ WHERE est_bloque = TRUE`);
         return result.rows;
     }
     /**
@@ -146,7 +146,7 @@ class UserService {
      */
     static async findAll() {
         const result = await (0, database_1.query)(`SELECT u.id_user, u.nom, u.prenom, u.email, u.firebase_uid, u.date_creation, u.est_bloque, u.id_type_user, t.libelle as type_libelle
-       FROM User_ u
+       FROM user_ u
        JOIN TypeUser t ON u.id_type_user = t.id_type_user
        ORDER BY u.date_creation DESC`);
         return result.rows;

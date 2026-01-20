@@ -219,7 +219,7 @@ router.post('/sync/signalements', auth_1.authMiddleware, auth_1.managerMiddlewar
         const query = `
       SELECT s.*, u.email, u.nom, u.prenom, st.libelle as status_libelle
       FROM Signalement s
-      JOIN User_ u ON s.id_user = u.id_user
+      JOIN user_ u ON s.id_user = u.id_user
       JOIN Status st ON s.id_status = st.id_status
       WHERE s.est_synchronise = FALSE
     `;
@@ -287,8 +287,8 @@ router.post('/sync/users', auth_1.authMiddleware, auth_1.managerMiddleware, asyn
         // Récupérer les utilisateurs sans firebase_uid
         const query = `
       SELECT u.*, t.libelle as type_libelle
-      FROM User_ u
-      JOIN TypeUser t ON u.id_type_user = t.id_type_user
+      FROM user_ u
+      JOIN typeuser t ON u.id_type_user = t.id_type_user
       WHERE u.firebase_uid IS NULL
     `;
         const result = await database_1.default.query(query);
@@ -316,7 +316,7 @@ router.post('/sync/users', auth_1.authMiddleware, auth_1.managerMiddleware, asyn
                     synchronized_at: admin.firestore.FieldValue.serverTimestamp()
                 });
                 // Mettre à jour PostgreSQL avec l'UID Firebase
-                await database_1.default.query('UPDATE User_ SET firebase_uid = $1 WHERE id_user = $2', [firebaseUser.uid, user.id_user]);
+                await database_1.default.query('UPDATE user_ SET firebase_uid = $1 WHERE id_user = $2', [firebaseUser.uid, user.id_user]);
                 syncedCount++;
             }
             catch (itemError) {
@@ -371,7 +371,7 @@ router.get('/sync-status', auth_1.authMiddleware, auth_1.managerMiddleware, asyn
         // Compter les signalements non synchronisés
         const signalementResult = await database_1.default.query('SELECT COUNT(*) as count FROM Signalement WHERE est_synchronise = FALSE');
         // Compter les utilisateurs sans firebase_uid
-        const userResult = await database_1.default.query('SELECT COUNT(*) as count FROM User_ WHERE firebase_uid IS NULL');
+        const userResult = await database_1.default.query('SELECT COUNT(*) as count FROM user_ WHERE firebase_uid IS NULL');
         // Dernière synchronisation
         const lastSyncResult = await database_1.default.query(`
       SELECT MAX(CASE WHEN firebase_id IS NOT NULL THEN date_signalement END) as last_signalement_sync

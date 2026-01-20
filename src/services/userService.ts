@@ -39,7 +39,7 @@ export class UserService {
   static async create(userData: CreateUserDTO): Promise<User> {
     // Mot de passe stocké en clair (développement)
     const result = await query(
-      `INSERT INTO User_ (nom, prenom, email, password, id_type_user, date_creation, est_bloque)
+      `INSERT INTO user_ (nom, prenom, email, password, id_type_user, date_creation, est_bloque)
        VALUES ($1, $2, $3, $4, $5, NOW(), FALSE)
        RETURNING id_user, nom, prenom, email, date_creation, est_bloque, id_type_user`,
       [
@@ -68,7 +68,7 @@ export class UserService {
   }): Promise<User> {
     // NE PAS re-hasher le mot de passe - il vient de Firebase déjà hashé
     const result = await query(
-      `INSERT INTO User_ (nom, prenom, email, password, id_type_user, firebase_uid, date_creation, est_bloque)
+      `INSERT INTO user_ (nom, prenom, email, password, id_type_user, firebase_uid, date_creation, est_bloque)
        VALUES ($1, $2, $3, $4, $5, $6, NOW(), FALSE)
        RETURNING id_user, nom, prenom, email, date_creation, est_bloque, id_type_user, firebase_uid`,
       [
@@ -91,7 +91,7 @@ export class UserService {
   static async findByEmail(email: string): Promise<User | null> {
     const result = await query(
       `SELECT id_user, nom, prenom, email, password, firebase_uid, date_creation, est_bloque, id_type_user
-       FROM User_ WHERE email = $1`,
+       FROM user_ WHERE email = $1`,
       [email]
     );
     return result.rows[0] || null;
@@ -103,7 +103,7 @@ export class UserService {
   static async findById(id: number): Promise<User | null> {
     const result = await query(
       `SELECT id_user, nom, prenom, email, firebase_uid, date_creation, est_bloque, id_type_user
-       FROM User_ WHERE id_user = $1`,
+       FROM user_ WHERE id_user = $1`,
       [id]
     );
     return result.rows[0] || null;
@@ -115,7 +115,7 @@ export class UserService {
   static async findByFirebaseUid(firebaseUid: string): Promise<User | null> {
     const result = await query(
       `SELECT id_user, nom, prenom, email, firebase_uid, date_creation, est_bloque, id_type_user
-       FROM User_ WHERE firebase_uid = $1`,
+       FROM user_ WHERE firebase_uid = $1`,
       [firebaseUid]
     );
     return result.rows[0] || null;
@@ -152,7 +152,7 @@ export class UserService {
 
     values.push(id);
     const result = await query(
-      `UPDATE User_ SET ${updates.join(', ')}
+      `UPDATE user_ SET ${updates.join(', ')}
        WHERE id_user = $${paramIndex}
        RETURNING id_user, nom, prenom, email, firebase_uid, date_creation, est_bloque, id_type_user`,
       values
@@ -166,7 +166,7 @@ export class UserService {
    */
   static async updateFirebaseUid(id: number, firebaseUid: string): Promise<void> {
     await query(
-      `UPDATE User_ SET firebase_uid = $1 WHERE id_user = $2`,
+      `UPDATE user_ SET firebase_uid = $1 WHERE id_user = $2`,
       [firebaseUid, id]
     );
   }
@@ -188,7 +188,7 @@ export class UserService {
     }
     
     await query(
-      `UPDATE User_ SET est_bloque = TRUE WHERE id_user = $1 AND id_type_user != 3`,
+      `UPDATE user_ SET est_bloque = TRUE WHERE id_user = $1 AND id_type_user != 3`,
       [id]
     );
   }
@@ -198,7 +198,7 @@ export class UserService {
    */
   static async unblockUser(id: number): Promise<void> {
     await query(
-      `UPDATE User_ SET est_bloque = FALSE WHERE id_user = $1`,
+      `UPDATE user_ SET est_bloque = FALSE WHERE id_user = $1`,
       [id]
     );
   }
@@ -209,7 +209,7 @@ export class UserService {
   static async getBlockedUsers(): Promise<User[]> {
     const result = await query(
       `SELECT id_user, nom, prenom, email, firebase_uid, date_creation, est_bloque, id_type_user
-       FROM User_ WHERE est_bloque = TRUE`
+       FROM user_ WHERE est_bloque = TRUE`
     );
     return result.rows;
   }
@@ -228,7 +228,7 @@ export class UserService {
   static async findAll(): Promise<User[]> {
     const result = await query(
       `SELECT u.id_user, u.nom, u.prenom, u.email, u.firebase_uid, u.date_creation, u.est_bloque, u.id_type_user, t.libelle as type_libelle
-       FROM User_ u
+       FROM user_ u
        JOIN TypeUser t ON u.id_type_user = t.id_type_user
        ORDER BY u.date_creation DESC`
     );

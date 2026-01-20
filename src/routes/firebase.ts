@@ -197,7 +197,7 @@ router.post('/sync/signalements', authMiddleware, managerMiddleware, async (req:
     const query = `
       SELECT s.*, u.email, u.nom, u.prenom, st.libelle as status_libelle
       FROM Signalement s
-      JOIN User_ u ON s.id_user = u.id_user
+      JOIN user_ u ON s.id_user = u.id_user
       JOIN Status st ON s.id_status = st.id_status
       WHERE s.est_synchronise = FALSE
     `;
@@ -275,8 +275,8 @@ router.post('/sync/users', authMiddleware, managerMiddleware, async (req: Reques
     // Récupérer les utilisateurs sans firebase_uid
     const query = `
       SELECT u.*, t.libelle as type_libelle
-      FROM User_ u
-      JOIN TypeUser t ON u.id_type_user = t.id_type_user
+      FROM user_ u
+      JOIN typeuser t ON u.id_type_user = t.id_type_user
       WHERE u.firebase_uid IS NULL
     `;
     
@@ -310,7 +310,7 @@ router.post('/sync/users', authMiddleware, managerMiddleware, async (req: Reques
         
         // Mettre à jour PostgreSQL avec l'UID Firebase
         await pool.query(
-          'UPDATE User_ SET firebase_uid = $1 WHERE id_user = $2',
+          'UPDATE user_ SET firebase_uid = $1 WHERE id_user = $2',
           [firebaseUser.uid, user.id_user]
         );
         
@@ -373,7 +373,7 @@ router.get('/sync-status', authMiddleware, managerMiddleware, async (req: Reques
     
     // Compter les utilisateurs sans firebase_uid
     const userResult = await pool.query(
-      'SELECT COUNT(*) as count FROM User_ WHERE firebase_uid IS NULL'
+      'SELECT COUNT(*) as count FROM user_ WHERE firebase_uid IS NULL'
     );
     
     // Dernière synchronisation
