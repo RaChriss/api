@@ -1,8 +1,9 @@
 import * as admin from 'firebase-admin';
-import { pool } from '../config/database';
+import pool from '../config/database';
 
 interface SignalementData {
   location?: { latitude: number; longitude: number };
+  description?: string;
   user_id: number;
   status_id?: number;
   date_signalement?: Date;
@@ -103,21 +104,18 @@ export class HybridDataService {
    * Crée un signalement dans PostgreSQL
    */
   private async createSignalementPostgres(data: SignalementData): Promise<{ id: string; source: 'postgres' }> {
-    const locationValue = data.location 
-      ? `POINT(${data.location.longitude}, ${data.location.latitude})`
-      : null;
-
     const query = `
-      INSERT INTO Signalement (location, Id_user, Id_Status, date_signalement, est_synchronise)
-      VALUES ($1, $2, $3, $4, FALSE)
-      RETURNING Id_Signalement
+      INSERT INTO Signalement (latitude, longitude, description, id_user, id_status, est_synchronise)
+      VALUES ($1, $2, $3, $4, $5, FALSE)
+      RETURNING id_signalement
     `;
 
     const values = [
-      locationValue,
+      data.location?.latitude || null,
+      data.location?.longitude || null,
+      data.description || 'Signalement créé hors ligne',
       data.user_id,
-      data.status_id || 1,
-      data.date_signalement || new Date()
+      data.status_id || 1
     ];
 
     const result = await pool.query(query, values);
@@ -153,9 +151,10 @@ export class HybridDataService {
   private async getSignalementsPostgres(): Promise<{ data: any[]; source: 'postgres' }> {
     const query = `
       SELECT 
-        s.Id_Signalement as id,
-        ST_X(s.location) as longitude,
-        ST_Y(s.location) as latitude,
+        s.id_signalement as id,
+        s.longitude,
+        s.latitude,
+        s.description,
         s.date_signalement,
         s.firebase_id,
         s.est_synchronise,
@@ -164,18 +163,19 @@ export class HybridDataService {
         u.prenom,
         st.libelle as status
       FROM Signalement s
-      JOIN User_ u ON s.Id_user = u.Id_user
-      JOIN Status st ON s.Id_Status = st.Id_Status
+      JOIN User_ u ON s.id_user = u.id_user
+      JOIN Status st ON s.id_status = st.id_status
       ORDER BY s.date_signalement DESC
     `;
 
     const result = await pool.query(query);
-    const signalements = result.rows.map(row => ({
+    const signalements = result.rows.map((row: any) => ({
       id: row.id,
       location: row.longitude && row.latitude ? {
-        latitude: row.latitude,
-        longitude: row.longitude
+        latitude: parseFloat(row.latitude),
+        longitude: parseFloat(row.longitude)
       } : null,
+      description: row.description,
       date_signalement: row.date_signalement,
       firebase_id: row.firebase_id,
       est_synchronise: row.est_synchronise,
@@ -227,9 +227,9 @@ export class HybridDataService {
    */
   private async createUserPostgres(data: UserData): Promise<{ uid: string; source: 'postgres' }> {
     const query = `
-      INSERT INTO User_ (nom, prenom, email, password, Id_type_user)
+      INSERT INTO User_ (nom, prenom, email, password, id_type_user)
       VALUES ($1, $2, $3, $4, $5)
-      RETURNING Id_user
+      RETURNING id_user
     `;
 
     const values = [

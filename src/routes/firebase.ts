@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import * as admin from 'firebase-admin';
-import { pool } from '../config/database';
-import { authenticate, requireManager } from '../middleware/auth';
+import pool from '../config/database';
+import { authMiddleware, managerMiddleware } from '../middleware/auth';
 
 const router = Router();
 
@@ -191,14 +191,14 @@ router.get('/signalements/:id', async (req: Request, res: Response): Promise<voi
  * Synchronise les signalements de PostgreSQL vers Firebase
  * Accessible uniquement aux Managers
  */
-router.post('/sync/signalements', authenticate, requireManager, async (req: Request, res: Response): Promise<void> => {
+router.post('/sync/signalements', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
   try {
     // Récupérer les signalements non synchronisés
     const query = `
       SELECT s.*, u.email, u.nom, u.prenom, st.libelle as status_libelle
       FROM Signalement s
-      JOIN User_ u ON s.Id_user = u.Id_user
-      JOIN Status st ON s.Id_Status = st.Id_Status
+      JOIN User_ u ON s.id_user = u.id_user
+      JOIN Status st ON s.id_status = st.id_status
       WHERE s.est_synchronise = FALSE
     `;
     
@@ -213,10 +213,11 @@ router.post('/sync/signalements', authenticate, requireManager, async (req: Requ
         // Créer ou mettre à jour dans Firebase
         const docRef = admin.firestore().collection('signalements').doc();
         const firebaseData = {
-          location: signalement.location ? {
-            latitude: signalement.location.x,
-            longitude: signalement.location.y
+          location: signalement.longitude && signalement.latitude ? {
+            latitude: parseFloat(signalement.latitude),
+            longitude: parseFloat(signalement.longitude)
           } : null,
+          description: signalement.description,
           date_signalement: signalement.date_signalement,
           user: {
             id: signalement.id_user,
@@ -235,7 +236,7 @@ router.post('/sync/signalements', authenticate, requireManager, async (req: Requ
         
         // Mettre à jour PostgreSQL avec l'ID Firebase
         await pool.query(
-          'UPDATE Signalement SET firebase_id = $1, est_synchronise = TRUE WHERE Id_Signalement = $2',
+          'UPDATE Signalement SET firebase_id = $1, est_synchronise = TRUE WHERE id_signalement = $2',
           [docRef.id, signalement.id_signalement]
         );
         
@@ -269,13 +270,13 @@ router.post('/sync/signalements', authenticate, requireManager, async (req: Requ
  * Synchronise les utilisateurs de PostgreSQL vers Firebase
  * Accessible uniquement aux Managers
  */
-router.post('/sync/users', authenticate, requireManager, async (req: Request, res: Response): Promise<void> => {
+router.post('/sync/users', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
   try {
     // Récupérer les utilisateurs sans firebase_uid
     const query = `
       SELECT u.*, t.libelle as type_libelle
       FROM User_ u
-      JOIN TypeUser t ON u.Id_type_user = t.Id_type_user
+      JOIN TypeUser t ON u.id_type_user = t.id_type_user
       WHERE u.firebase_uid IS NULL
     `;
     
@@ -309,7 +310,7 @@ router.post('/sync/users', authenticate, requireManager, async (req: Request, re
         
         // Mettre à jour PostgreSQL avec l'UID Firebase
         await pool.query(
-          'UPDATE User_ SET firebase_uid = $1 WHERE Id_user = $2',
+          'UPDATE User_ SET firebase_uid = $1 WHERE id_user = $2',
           [firebaseUser.uid, user.id_user]
         );
         
@@ -363,7 +364,7 @@ router.get('/status', async (req: Request, res: Response): Promise<void> => {
  * Récupère le statut de synchronisation
  * Accessible uniquement aux Managers
  */
-router.get('/sync-status', authenticate, requireManager, async (req: Request, res: Response): Promise<void> => {
+router.get('/sync-status', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
   try {
     // Compter les signalements non synchronisés
     const signalementResult = await pool.query(

@@ -7,6 +7,7 @@ const express_1 = require("express");
 const userService_1 = __importDefault(require("../services/userService"));
 const loginAttemptService_1 = __importDefault(require("../services/loginAttemptService"));
 const sessionService_1 = __importDefault(require("../services/sessionService"));
+const hybridDataService_1 = require("../services/hybridDataService");
 const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
 /**
@@ -473,6 +474,97 @@ router.post('/sessions/cleanup', auth_1.authMiddleware, auth_1.managerMiddleware
         res.status(500).json({
             success: false,
             error: 'Erreur serveur'
+        });
+    }
+});
+/**
+ * @swagger
+ * /api/admin/sync/status:
+ *   get:
+ *     summary: Statut de la synchronisation Firebase
+ *     tags: [Administration]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Statut de synchronisation
+ */
+router.get('/sync/status', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
+    try {
+        const syncStatus = await hybridDataService_1.hybridDataService.getSyncStatus();
+        const isFirebaseConnected = hybridDataService_1.hybridDataService.isFirebaseAvailable();
+        res.status(200).json({
+            success: true,
+            firebase_connected: isFirebaseConnected,
+            ...syncStatus,
+            current_mode: isFirebaseConnected ? 'firebase' : 'postgres'
+        });
+    }
+    catch (error) {
+        console.error('Erreur statut sync:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur'
+        });
+    }
+});
+/**
+ * @swagger
+ * /api/admin/sync/execute:
+ *   post:
+ *     summary: Déclencher la synchronisation vers Firebase
+ *     tags: [Administration]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Synchronisation effectuée
+ */
+router.post('/sync/execute', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
+    try {
+        // Vérifier la connexion Firebase
+        if (!hybridDataService_1.hybridDataService.isFirebaseAvailable()) {
+            res.status(400).json({
+                success: false,
+                error: 'Firebase non disponible. Vérifiez la connexion internet.'
+            });
+            return;
+        }
+        // Déclencher la synchronisation via les endpoints Firebase
+        const firebaseResponse = await Promise.all([
+            fetch('http://localhost:3000/api/firebase/sync/signalements', {
+                method: 'POST',
+                headers: {
+                    'Authorization': req.headers.authorization || '',
+                    'Content-Type': 'application/json'
+                }
+            }),
+            fetch('http://localhost:3000/api/firebase/sync/users', {
+                method: 'POST',
+                headers: {
+                    'Authorization': req.headers.authorization || '',
+                    'Content-Type': 'application/json'
+                }
+            })
+        ]);
+        const [signalementResult, userResult] = await Promise.all([
+            firebaseResponse[0].json(),
+            firebaseResponse[1].json()
+        ]);
+        res.status(200).json({
+            success: true,
+            message: 'Synchronisation terminée',
+            results: {
+                signalements: signalementResult,
+                users: userResult
+            }
+        });
+    }
+    catch (error) {
+        console.error('Erreur synchronisation:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur lors de la synchronisation'
         });
     }
 });
