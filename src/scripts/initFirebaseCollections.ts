@@ -20,9 +20,10 @@ interface Status {
 interface Parametre {
   id: number;
   nom: string;
-  limite_tentatives: number;
-  duree_session: number;
-  id_type_user: number;
+  valeur: string;
+  type: 'string' | 'number' | 'boolean' | 'json';
+  description?: string;
+  date_modification: admin.firestore.Timestamp;
 }
 
 interface Entreprise {
@@ -83,20 +84,24 @@ interface HistoriqueStatus {
 }
 
 interface TentativeConnexion {
-  id: number;  // Correspond à Id_tentative SERIAL (INT) dans PostgreSQL
-  id_user: number;  // Correspond à Id_user INT dans PostgreSQL
-  date_tentative: admin.firestore.Timestamp;
+  id: number;
+  email: string;  // Suivi par email (avant authentification)
+  ip_address?: string;
   succes: boolean;
-  adresse_ip?: string;
+  date_tentative: admin.firestore.Timestamp;
+  raison_echec?: string;
 }
 
 interface Session {
-  id: number;  // Correspond à Id_session SERIAL (INT) dans PostgreSQL
-  id_user: number;  // Correspond à Id_user INT dans PostgreSQL
+  id: number;
+  id_user: number;
   token: string;
+  refresh_token?: string;
   date_creation: admin.firestore.Timestamp;
   date_expiration: admin.firestore.Timestamp;
   est_active: boolean;
+  ip_address?: string;
+  user_agent?: string;
 }
 
 /**
@@ -104,7 +109,7 @@ interface Session {
  */
 export async function initializeAllFirebaseCollections(): Promise<void> {
   console.log('🚀 Début de l\'initialisation des collections Firebase...');
-  
+
   try {
     // Vérifier la configuration Firebase avant l'initialisation
     const serviceAccountPath = require('path').join(__dirname, '../../firebase-service-account.json');
@@ -157,29 +162,56 @@ export async function initializeAllFirebaseCollections(): Promise<void> {
       batch.set(ref, status);
     });
 
-    // 3. Créer les paramètres par type d'utilisateur
+    // 3. Créer les paramètres globaux (structure nom/valeur/type)
     console.log('📁 Création de la collection Parametre...');
     const parametresData: Parametre[] = [
       {
         id: 1,
-        nom: 'Paramètres Visiteur',
-        limite_tentatives: 3,
-        duree_session: 3600,
-        id_type_user: 1
+        nom: 'max_tentatives_connexion',
+        valeur: '5',
+        type: 'number',
+        description: 'Nombre maximum de tentatives de connexion avant blocage',
+        date_modification: admin.firestore.Timestamp.now()
       },
       {
         id: 2,
-        nom: 'Paramètres Utilisateur',
-        limite_tentatives: 3,
-        duree_session: 7200,
-        id_type_user: 2
+        nom: 'duree_blocage_minutes',
+        valeur: '15',
+        type: 'number',
+        description: 'Durée du blocage après trop de tentatives (en minutes)',
+        date_modification: admin.firestore.Timestamp.now()
       },
       {
         id: 3,
-        nom: 'Paramètres Manager',
-        limite_tentatives: 5,
-        duree_session: 14400,
-        id_type_user: 3
+        nom: 'session_expiration_heures',
+        valeur: '24',
+        type: 'number',
+        description: 'Durée de validité des sessions (en heures)',
+        date_modification: admin.firestore.Timestamp.now()
+      },
+      {
+        id: 4,
+        nom: 'refresh_token_expiration_jours',
+        valeur: '30',
+        type: 'number',
+        description: 'Durée de validité des refresh tokens (en jours)',
+        date_modification: admin.firestore.Timestamp.now()
+      },
+      {
+        id: 5,
+        nom: 'maintenance_mode',
+        valeur: 'false',
+        type: 'boolean',
+        description: 'Mode maintenance activé',
+        date_modification: admin.firestore.Timestamp.now()
+      },
+      {
+        id: 6,
+        nom: 'app_version',
+        valeur: '1.0.0',
+        type: 'string',
+        description: 'Version actuelle de l\'application',
+        date_modification: admin.firestore.Timestamp.now()
       }
     ];
 
@@ -232,7 +264,7 @@ export async function initializeAllFirebaseCollections(): Promise<void> {
     // Créer les collections qui dépendent d'autres collections mais sans données initiales
     // (elles seront remplies dynamiquement par l'application)
     console.log('📁 Création des collections vides...');
-    
+
     // Collection Signalement (vide)
     const signalementRef = db.collection('Signalement').doc('_placeholder');
     await signalementRef.set({
@@ -277,14 +309,14 @@ export async function initializeAllFirebaseCollections(): Promise<void> {
     console.log('\n📋 Collections créées:');
     console.log('  - TypeUser (3 documents)');
     console.log('  - Status (3 documents)');
-    console.log('  - Parametre (3 documents)');
+    console.log('  - Parametre (6 documents: max_tentatives, duree_blocage, session_expiration, etc.)');
     console.log('  - Entreprise (1 document)');
     console.log('  - User_ (1 document manager)');
     console.log('  - Signalement (vide)');
     console.log('  - Reparation (vide)');
     console.log('  - HistoriqueStatus (vide)');
-    console.log('  - TentativeConnexion (vide)');
-    console.log('  - Session (vide)');
+    console.log('  - TentativeConnexion (vide - suivi par email)');
+    console.log('  - Session (vide - avec refresh_token, ip_address, user_agent)');
 
   } catch (error) {
     console.error('❌ Erreur lors de l\'initialisation des collections:', error);
@@ -297,11 +329,11 @@ export async function initializeAllFirebaseCollections(): Promise<void> {
  */
 export async function removePlaceholders(): Promise<void> {
   console.log('🧹 Suppression des documents placeholder...');
-  
+
   try {
     const db = getFirestore();
     const collections = ['Signalement', 'Reparation', 'HistoriqueStatus', 'TentativeConnexion', 'Session'];
-    
+
     for (const collectionName of collections) {
       const placeholderRef = db.collection(collectionName).doc('_placeholder');
       const doc = await placeholderRef.get();
@@ -310,7 +342,7 @@ export async function removePlaceholders(): Promise<void> {
         console.log(`  ✅ Placeholder supprimé de ${collectionName}`);
       }
     }
-    
+
     console.log('✅ Tous les placeholders ont été supprimés');
   } catch (error) {
     console.error('❌ Erreur lors de la suppression des placeholders:', error);
@@ -322,19 +354,19 @@ export async function removePlaceholders(): Promise<void> {
  */
 export async function checkFirebaseCollections(): Promise<void> {
   console.log('🔍 Vérification des collections Firebase...');
-  
+
   try {
     const db = getFirestore();
     const collections = [
-      'TypeUser', 'Status', 'Parametre', 'Entreprise', 
-      'User_', 'Signalement', 'Reparation', 'HistoriqueStatus', 
+      'TypeUser', 'Status', 'Parametre', 'Entreprise',
+      'User_', 'Signalement', 'Reparation', 'HistoriqueStatus',
       'TentativeConnexion', 'Session'
     ];
-    
+
     for (const collectionName of collections) {
       const snapshot = await db.collection(collectionName).get();
       console.log(`  📁 ${collectionName}: ${snapshot.size} document(s)`);
-      
+
       if (snapshot.size > 0) {
         snapshot.docs.forEach(doc => {
           const data = doc.data();
@@ -344,7 +376,7 @@ export async function checkFirebaseCollections(): Promise<void> {
         });
       }
     }
-    
+
     console.log('✅ Vérification terminée');
   } catch (error) {
     console.error('❌ Erreur lors de la vérification:', error);
@@ -375,7 +407,7 @@ async function main() {
       console.log('  clean - Supprime les documents placeholder');
       process.exit(1);
   }
-  
+
   process.exit(0);
 }
 

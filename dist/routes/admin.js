@@ -5,10 +5,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const userService_1 = __importDefault(require("../services/userService"));
-const loginAttemptService_1 = __importDefault(require("../services/loginAttemptService"));
-const sessionService_1 = __importDefault(require("../services/sessionService"));
 const hybridDataService_1 = require("../services/hybridDataService");
 const auth_1 = require("../middleware/auth");
+const firebase_1 = require("../config/firebase");
 const router = (0, express_1.Router)();
 /**
  * @swagger
@@ -32,9 +31,9 @@ router.get('/users/blocked', auth_1.authMiddleware, auth_1.managerMiddleware, as
             count: blockedUsers.length,
             users: blockedUsers.map(user => ({
                 id: user.id_user,
-                nom: user.nom,
-                prenom: user.prenom,
+                firebase_uid: user.firebase_uid,
                 email: user.email,
+                display_name: user.display_name,
                 date_creation: user.date_creation,
                 type_user: user.id_type_user
             }))
@@ -90,18 +89,30 @@ router.post('/users/:id/unblock', auth_1.authMiddleware, auth_1.managerMiddlewar
             });
             return;
         }
-        // Débloquer l'utilisateur
+        // Débloquer l'utilisateur localement
         await userService_1.default.unblockUser(userId);
-        // Réinitialiser les tentatives de connexion
-        await loginAttemptService_1.default.resetAttempts(userId);
+        // Débloquer aussi dans Firestore si en ligne
+        const isOnline = await hybridDataService_1.hybridDataService.isFirebaseAvailable();
+        if (isOnline && user.firebase_uid) {
+            try {
+                const db = (0, firebase_1.getFirestore)();
+                await db.collection('User_').doc(user.firebase_uid).update({
+                    est_bloque: false
+                });
+                console.log(`✅ Utilisateur débloqué dans Firestore: ${user.email}`);
+            }
+            catch (firebaseError) {
+                console.warn('⚠️ Erreur déblocage Firestore:', firebaseError.message);
+            }
+        }
         res.status(200).json({
             success: true,
             message: `Utilisateur ${user.email} débloqué avec succès`,
             user: {
                 id: user.id_user,
-                nom: user.nom,
-                prenom: user.prenom,
-                email: user.email
+                firebase_uid: user.firebase_uid,
+                email: user.email,
+                display_name: user.display_name
             }
         });
     }
@@ -151,10 +162,22 @@ router.post('/users/:id/block', auth_1.authMiddleware, auth_1.managerMiddleware,
             });
             return;
         }
-        // Bloquer l'utilisateur
+        // Bloquer l'utilisateur localement
         await userService_1.default.blockUser(userId);
-        // Désactiver toutes ses sessions
-        await sessionService_1.default.deactivateUserSessions(userId);
+        // Bloquer aussi dans Firestore si en ligne
+        const isOnline = await hybridDataService_1.hybridDataService.isFirebaseAvailable();
+        if (isOnline && user.firebase_uid) {
+            try {
+                const db = (0, firebase_1.getFirestore)();
+                await db.collection('User_').doc(user.firebase_uid).update({
+                    est_bloque: true
+                });
+                console.log(`✅ Utilisateur bloqué dans Firestore: ${user.email}`);
+            }
+            catch (firebaseError) {
+                console.warn('⚠️ Erreur blocage Firestore:', firebaseError.message);
+            }
+        }
         res.status(200).json({
             success: true,
             message: `Utilisateur ${user.email} bloqué avec succès`
@@ -196,10 +219,11 @@ router.get('/users', auth_1.authMiddleware, auth_1.managerMiddleware, async (req
             count: users.length,
             users: users.map(user => ({
                 id: user.id_user,
-                nom: user.nom,
-                prenom: user.prenom,
+                firebase_uid: user.firebase_uid,
                 email: user.email,
+                display_name: user.display_name,
                 date_creation: user.date_creation,
+                derniere_sync: user.derniere_sync,
                 est_bloque: user.est_bloque,
                 type_user: user.id_type_user,
                 type_libelle: user.type_libelle
@@ -216,9 +240,9 @@ router.get('/users', auth_1.authMiddleware, auth_1.managerMiddleware, async (req
 });
 /**
  * @swagger
- * /api/admin/users/{id}/attempts:
- *   get:
- *     summary: Historique des tentatives de connexion d'un utilisateur
+ * /api/admin/users/{id}/update-type:
+ *   put:
+ *     summary: Modifier le type d'un utilisateur
  *     tags: [Administration]
  *     security:
  *       - bearerAuth: []
@@ -228,13 +252,28 @@ router.get('/users', auth_1.authMiddleware, auth_1.managerMiddleware, async (req
  *         required: true
  *         schema:
  *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - type_user
+ *             properties:
+ *               type_user:
+ *                 type: integer
+ *                 description: 1=Visiteur, 2=Utilisateur, 3=Manager
  *     responses:
  *       200:
- *         description: Historique des tentatives
+ *         description: Type utilisateur mis à jour
+ *       404:
+ *         description: Utilisateur non trouvé
  */
-router.get('/users/:id/attempts', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
+router.put('/users/:id/update-type', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
     try {
         const userId = parseInt(req.params.id, 10);
+        const { type_user } = req.body;
         if (isNaN(userId)) {
             res.status(400).json({
                 success: false,
@@ -242,52 +281,10 @@ router.get('/users/:id/attempts', auth_1.authMiddleware, auth_1.managerMiddlewar
             });
             return;
         }
-        const attempts = await loginAttemptService_1.default.getAttemptHistory(userId, 20);
-        res.status(200).json({
-            success: true,
-            user_id: userId,
-            count: attempts.length,
-            attempts: attempts.map(attempt => ({
-                id: attempt.id_tentative,
-                date: attempt.date_tentative,
-                succes: attempt.succes,
-                adresse_ip: attempt.adresse_ip
-            }))
-        });
-    }
-    catch (error) {
-        console.error('Erreur historique tentatives:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Erreur serveur'
-        });
-    }
-});
-/**
- * @swagger
- * /api/admin/users/{id}/reset-attempts:
- *   post:
- *     summary: Réinitialiser les tentatives de connexion d'un utilisateur
- *     tags: [Administration]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Tentatives réinitialisées
- */
-router.post('/users/:id/reset-attempts', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
-    try {
-        const userId = parseInt(req.params.id, 10);
-        if (isNaN(userId)) {
+        if (!type_user || ![1, 2, 3].includes(type_user)) {
             res.status(400).json({
                 success: false,
-                error: 'ID utilisateur invalide'
+                error: 'Type utilisateur invalide (1=Visiteur, 2=Utilisateur, 3=Manager)'
             });
             return;
         }
@@ -299,181 +296,38 @@ router.post('/users/:id/reset-attempts', auth_1.authMiddleware, auth_1.managerMi
             });
             return;
         }
-        await loginAttemptService_1.default.resetAttempts(userId);
-        res.status(200).json({
-            success: true,
-            message: `Tentatives de connexion réinitialisées pour ${user.email}`
-        });
-    }
-    catch (error) {
-        console.error('Erreur reset tentatives:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Erreur serveur'
-        });
-    }
-});
-/**
- * @swagger
- * /api/admin/parameters:
- *   get:
- *     summary: Obtenir les paramètres de configuration
- *     tags: [Administration]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Liste des paramètres
- */
-router.get('/parameters', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
-    try {
-        const parameters = await loginAttemptService_1.default.getAllParameters();
-        res.status(200).json({
-            success: true,
-            parameters: parameters.map(param => ({
-                id: param.id_parametre,
-                nom: param.nom,
-                limite_tentatives: param.limite_tentatives,
-                duree_session: param.duree_session,
-                duree_session_minutes: Math.round(param.duree_session / 60),
-                type_user: param.id_type_user,
-                type_libelle: param.type_libelle
-            }))
-        });
-    }
-    catch (error) {
-        console.error('Erreur get parameters:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Erreur serveur'
-        });
-    }
-});
-/**
- * @swagger
- * /api/admin/parameters/{typeUserId}:
- *   put:
- *     summary: Modifier les paramètres d'un type d'utilisateur
- *     tags: [Administration]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: typeUserId
- *         required: true
- *         schema:
- *           type: integer
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               limite_tentatives:
- *                 type: integer
- *                 example: 3
- *               duree_session:
- *                 type: integer
- *                 description: Durée en secondes
- *                 example: 7200
- *     responses:
- *       200:
- *         description: Paramètres mis à jour
- */
-router.put('/parameters/:typeUserId', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
-    try {
-        const typeUserId = parseInt(req.params.typeUserId, 10);
-        const { limite_tentatives, duree_session } = req.body;
-        if (isNaN(typeUserId)) {
-            res.status(400).json({
-                success: false,
-                error: 'ID type utilisateur invalide'
-            });
-            return;
-        }
-        const updated = await loginAttemptService_1.default.updateParameters(typeUserId, limite_tentatives, duree_session);
-        if (!updated) {
-            res.status(404).json({
-                success: false,
-                error: 'Paramètres non trouvés pour ce type d\'utilisateur'
-            });
-            return;
+        // Mettre à jour le type localement
+        await userService_1.default.update(userId, { type_user });
+        // Mettre à jour aussi dans Firestore si en ligne
+        const isOnline = await hybridDataService_1.hybridDataService.isFirebaseAvailable();
+        if (isOnline && user.firebase_uid) {
+            try {
+                const db = (0, firebase_1.getFirestore)();
+                await db.collection('User_').doc(user.firebase_uid).update({
+                    type_user
+                });
+                console.log(`✅ Type utilisateur mis à jour dans Firestore: ${user.email}`);
+            }
+            catch (firebaseError) {
+                console.warn('⚠️ Erreur mise à jour Firestore:', firebaseError.message);
+            }
         }
         res.status(200).json({
             success: true,
-            message: 'Paramètres mis à jour',
-            parameters: {
-                id: updated.id_parametre,
-                nom: updated.nom,
-                limite_tentatives: updated.limite_tentatives,
-                duree_session: updated.duree_session,
-                duree_session_minutes: Math.round(updated.duree_session / 60)
+            message: `Type utilisateur mis à jour pour ${user.email}`,
+            user: {
+                id: user.id_user,
+                firebase_uid: user.firebase_uid,
+                email: user.email,
+                type_user
             }
         });
     }
     catch (error) {
-        console.error('Erreur update parameters:', error);
+        console.error('Erreur update type:', error);
         res.status(500).json({
             success: false,
-            error: 'Erreur serveur'
-        });
-    }
-});
-/**
- * @swagger
- * /api/admin/sessions/stats:
- *   get:
- *     summary: Statistiques des sessions
- *     tags: [Administration]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Statistiques des sessions
- */
-router.get('/sessions/stats', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
-    try {
-        const activeSessions = await sessionService_1.default.countActiveSessions();
-        res.status(200).json({
-            success: true,
-            stats: {
-                active_sessions: activeSessions
-            }
-        });
-    }
-    catch (error) {
-        console.error('Erreur stats sessions:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Erreur serveur'
-        });
-    }
-});
-/**
- * @swagger
- * /api/admin/sessions/cleanup:
- *   post:
- *     summary: Nettoyer les sessions expirées
- *     tags: [Administration]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Sessions nettoyées
- */
-router.post('/sessions/cleanup', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
-    try {
-        const cleaned = await sessionService_1.default.cleanExpiredSessions();
-        res.status(200).json({
-            success: true,
-            message: `${cleaned} session(s) expirée(s) nettoyée(s)`
-        });
-    }
-    catch (error) {
-        console.error('Erreur cleanup sessions:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Erreur serveur'
+            error: 'Erreur lors de la mise à jour'
         });
     }
 });
@@ -510,9 +364,9 @@ router.get('/sync/status', auth_1.authMiddleware, auth_1.managerMiddleware, asyn
 });
 /**
  * @swagger
- * /api/admin/sync/execute:
+ * /api/admin/sync/users:
  *   post:
- *     summary: Déclencher la synchronisation vers Firebase
+ *     summary: Synchroniser tous les utilisateurs vers Firebase
  *     tags: [Administration]
  *     security:
  *       - bearerAuth: []
@@ -520,51 +374,194 @@ router.get('/sync/status', auth_1.authMiddleware, auth_1.managerMiddleware, asyn
  *       200:
  *         description: Synchronisation effectuée
  */
-router.post('/sync/execute', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
+router.post('/sync/users', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
     try {
-        // Vérifier la connexion Firebase
-        if (!hybridDataService_1.hybridDataService.isFirebaseAvailable()) {
-            res.status(400).json({
+        const isOnline = await hybridDataService_1.hybridDataService.isFirebaseAvailable();
+        if (!isOnline) {
+            res.status(503).json({
                 success: false,
-                error: 'Firebase non disponible. Vérifiez la connexion internet.'
+                error: 'Firebase non disponible. Synchronisation impossible.'
             });
             return;
         }
-        // Déclencher la synchronisation via les endpoints Firebase
-        const firebaseResponse = await Promise.all([
-            fetch('http://localhost:3000/api/firebase/sync/signalements', {
-                method: 'POST',
-                headers: {
-                    'Authorization': req.headers.authorization || '',
-                    'Content-Type': 'application/json'
+        const db = (0, firebase_1.getFirestore)();
+        const localUsers = await userService_1.default.findAll();
+        let synced = 0;
+        let errors = 0;
+        for (const user of localUsers) {
+            try {
+                // Skip users without firebase_uid (created offline only)
+                if (!user.firebase_uid) {
+                    console.log(`⏭️ Skip sync user ${user.email} (pas de firebase_uid)`);
+                    continue;
                 }
-            }),
-            fetch('http://localhost:3000/api/firebase/sync/users', {
-                method: 'POST',
-                headers: {
-                    'Authorization': req.headers.authorization || '',
-                    'Content-Type': 'application/json'
-                }
-            })
-        ]);
-        const [signalementResult, userResult] = await Promise.all([
-            firebaseResponse[0].json(),
-            firebaseResponse[1].json()
-        ]);
+                await db.collection('User_').doc(user.firebase_uid).set({
+                    firebase_uid: user.firebase_uid,
+                    email: user.email,
+                    display_name: user.display_name,
+                    type_user: user.id_type_user,
+                    est_bloque: user.est_bloque,
+                    date_creation: user.date_creation
+                }, { merge: true });
+                synced++;
+            }
+            catch (err) {
+                console.warn(`⚠️ Erreur sync user ${user.email}:`, err.message);
+                errors++;
+            }
+        }
         res.status(200).json({
             success: true,
-            message: 'Synchronisation terminée',
-            results: {
-                signalements: signalementResult,
-                users: userResult
+            message: 'Synchronisation utilisateurs terminée',
+            stats: {
+                total: localUsers.length,
+                synced,
+                errors
             }
         });
     }
     catch (error) {
-        console.error('Erreur synchronisation:', error);
+        console.error('Erreur synchronisation users:', error);
         res.status(500).json({
             success: false,
             error: 'Erreur lors de la synchronisation'
+        });
+    }
+});
+/**
+ * @swagger
+ * /api/admin/firebase/users:
+ *   get:
+ *     summary: Liste des utilisateurs Firebase Auth
+ *     tags: [Administration]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Liste des utilisateurs Firebase
+ */
+router.get('/firebase/users', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
+    try {
+        const isOnline = await hybridDataService_1.hybridDataService.isFirebaseAvailable();
+        if (!isOnline) {
+            res.status(503).json({
+                success: false,
+                error: 'Firebase non disponible'
+            });
+            return;
+        }
+        const auth = (0, firebase_1.getAuth)();
+        const listResult = await auth.listUsers(100);
+        res.status(200).json({
+            success: true,
+            count: listResult.users.length,
+            users: listResult.users.map(user => ({
+                uid: user.uid,
+                email: user.email,
+                display_name: user.displayName,
+                email_verified: user.emailVerified,
+                disabled: user.disabled,
+                created_at: user.metadata.creationTime
+            }))
+        });
+    }
+    catch (error) {
+        console.error('Erreur liste Firebase users:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur'
+        });
+    }
+});
+/**
+ * @swagger
+ * /api/admin/firebase/users/{uid}/disable:
+ *   post:
+ *     summary: Désactiver un utilisateur Firebase Auth
+ *     tags: [Administration]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: uid
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Utilisateur désactivé
+ */
+router.post('/firebase/users/:uid/disable', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
+    try {
+        const { uid } = req.params;
+        const isOnline = await hybridDataService_1.hybridDataService.isFirebaseAvailable();
+        if (!isOnline) {
+            res.status(503).json({
+                success: false,
+                error: 'Firebase non disponible'
+            });
+            return;
+        }
+        const auth = (0, firebase_1.getAuth)();
+        await auth.updateUser(uid, { disabled: true });
+        // Aussi bloquer localement
+        await userService_1.default.blockUserByFirebaseUid(uid);
+        res.status(200).json({
+            success: true,
+            message: 'Utilisateur Firebase désactivé'
+        });
+    }
+    catch (error) {
+        console.error('Erreur disable Firebase user:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur'
+        });
+    }
+});
+/**
+ * @swagger
+ * /api/admin/firebase/users/{uid}/enable:
+ *   post:
+ *     summary: Réactiver un utilisateur Firebase Auth
+ *     tags: [Administration]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: uid
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Utilisateur réactivé
+ */
+router.post('/firebase/users/:uid/enable', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
+    try {
+        const { uid } = req.params;
+        const isOnline = await hybridDataService_1.hybridDataService.isFirebaseAvailable();
+        if (!isOnline) {
+            res.status(503).json({
+                success: false,
+                error: 'Firebase non disponible'
+            });
+            return;
+        }
+        const auth = (0, firebase_1.getAuth)();
+        await auth.updateUser(uid, { disabled: false });
+        // Aussi débloquer localement
+        await userService_1.default.unblockUserByFirebaseUid(uid);
+        res.status(200).json({
+            success: true,
+            message: 'Utilisateur Firebase réactivé'
+        });
+    }
+    catch (error) {
+        console.error('Erreur enable Firebase user:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur'
         });
     }
 });

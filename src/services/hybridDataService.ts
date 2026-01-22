@@ -11,11 +11,10 @@ interface SignalementData {
 }
 
 interface UserData {
-  nom: string;
-  prenom: string;
+  firebase_uid: string;
   email: string;
-  password?: string;
-  type_user_id: number;
+  display_name?: string;
+  type_user?: number;
 }
 
 export class HybridDataService {
@@ -56,15 +55,15 @@ export class HybridDataService {
    */
   public async createSignalement(data: SignalementData): Promise<{ id: string; source: 'firebase' | 'postgres' }> {
     const isOnline = await this.isFirebaseAvailable();
-    
+
     if (isOnline) {
       // Mode online : utiliser Firebase ET PostgreSQL
       console.log('📡 Mode en ligne : création dans Firebase + PostgreSQL');
-      
+
       try {
         // 1. Créer dans PostgreSQL d'abord
         const postgresResult = await this.createSignalementPostgres(data);
-        
+
         // 2. Créer dans Firebase avec référence PostgreSQL
         try {
           await admin.firestore().collection('signalements').add({
@@ -75,12 +74,12 @@ export class HybridDataService {
             postgres_id: postgresResult.id,
             created_online: true
           });
-          
+
           console.log('✅ Signalement créé dans Firebase + PostgreSQL');
         } catch (firebaseError) {
           console.warn('⚠️ Erreur Firebase (PostgreSQL OK):', (firebaseError as Error).message);
         }
-        
+
         return postgresResult; // Retourner l'ID PostgreSQL
       } catch (error) {
         console.error('❌ Erreur création signalement:', error);
@@ -120,18 +119,18 @@ export class HybridDataService {
    */
   public async getSignalements(): Promise<{ data: any[]; source: 'firebase' | 'postgres' }> {
     const isOnline = await this.isFirebaseAvailable();
-    
+
     if (isOnline) {
       // Mode online : Firebase en priorité, PostgreSQL en fallback
       console.log('📡 Mode en ligne : lecture Firebase (avec fallback PostgreSQL)');
-      
+
       try {
         const snapshot = await admin.firestore().collection('signalements').get();
         const signalements = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
         }));
-        
+
         console.log(`✅ ${signalements.length} signalements récupérés depuis Firebase`);
         return { data: signalements, source: 'firebase' };
       } catch (error) {
@@ -159,8 +158,7 @@ export class HybridDataService {
         s.firebase_id,
         s.est_synchronise,
         u.email,
-        u.nom,
-        u.prenom,
+        u.display_name,
         st.libelle as status
       FROM Signalement s
       JOIN User_ u ON s.id_user = u.id_user
@@ -181,8 +179,7 @@ export class HybridDataService {
       est_synchronise: row.est_synchronise,
       user: {
         email: row.email,
-        nom: row.nom,
-        prenom: row.prenom
+        display_name: row.display_name
       },
       status: row.status
     }));
@@ -191,79 +188,63 @@ export class HybridDataService {
   }
 
   /**
-   * Crée un utilisateur (Firebase ou PostgreSQL selon la connexion)
+   * Synchronise un utilisateur depuis Firebase vers PostgreSQL (cache local)
+   * Utilise Firebase Auth - le mot de passe n'est jamais stocké localement
    */
-  public async createUser(data: UserData): Promise<{ uid: string; source: 'firebase' | 'postgres' }> {
+  public async syncUserFromFirebase(data: UserData): Promise<{ uid: string; source: 'firebase' | 'postgres' }> {
     const isOnline = await this.isFirebaseAvailable();
-    
-    if (isOnline) {
-      // Mode online : utiliser Firebase ET PostgreSQL
-      console.log('📡 Mode en ligne : création utilisateur Firebase + PostgreSQL');
-      
-      try {
-        // 1. Créer dans PostgreSQL d'abord
-        const postgresResult = await this.createUserPostgres(data);
-        
-        // 2. Créer dans Firebase Auth + Firestore
-        try {
-          const firebaseUser = await admin.auth().createUser({
-            email: data.email,
-            displayName: `${data.prenom} ${data.nom}`
-          });
 
-          // Créer dans Firestore avec référence PostgreSQL
-          await admin.firestore().collection('users').doc(firebaseUser.uid).set({
-            nom: data.nom,
-            prenom: data.prenom,
-            email: data.email,
-            type_user_id: data.type_user_id,
-            postgres_id: postgresResult.uid,
-            date_creation: admin.firestore.FieldValue.serverTimestamp()
-          });
-          
-          // 3. Mettre à jour PostgreSQL avec l'UID Firebase
-          await pool.query(
-            'UPDATE User_ SET firebase_uid = $1 WHERE id_user = $2',
-            [firebaseUser.uid, postgresResult.uid]
-          );
-          
-          console.log('✅ Utilisateur créé dans Firebase + PostgreSQL');
-        } catch (firebaseError) {
-          console.warn('⚠️ Erreur Firebase Auth (PostgreSQL OK):', (firebaseError as Error).message);
-        }
-        
-        return postgresResult; // Retourner l'ID PostgreSQL
-      } catch (error) {
-        console.error('❌ Erreur création utilisateur:', error);
-        throw error;
-      }
-    } else {
-      // Mode offline : PostgreSQL seulement
-      console.log('💾 Mode hors ligne : création utilisateur PostgreSQL uniquement');
-      return await this.createUserPostgres(data);
+    if (!isOnline) {
+      throw new Error('Synchronisation impossible en mode hors ligne');
+    }
+
+    console.log('📡 Synchronisation utilisateur depuis Firebase...');
+
+    try {
+      // Créer/mettre à jour dans PostgreSQL (cache local)
+      const query = `
+        INSERT INTO User_ (firebase_uid, email, display_name, id_type_user, date_creation, derniere_sync, est_bloque)
+        VALUES ($1, $2, $3, $4, NOW(), NOW(), FALSE)
+        ON CONFLICT (firebase_uid) 
+        DO UPDATE SET 
+          email = EXCLUDED.email,
+          display_name = EXCLUDED.display_name,
+          derniere_sync = NOW()
+        RETURNING id_user
+      `;
+
+      const values = [
+        data.firebase_uid,
+        data.email,
+        data.display_name || null,
+        data.type_user || 2
+      ];
+
+      const result = await pool.query(query, values);
+      console.log('✅ Utilisateur synchronisé vers PostgreSQL (cache local)');
+
+      return { uid: result.rows[0].id_user.toString(), source: 'firebase' };
+    } catch (error) {
+      console.error('❌ Erreur synchronisation utilisateur:', error);
+      throw error;
     }
   }
 
   /**
-   * Crée un utilisateur dans PostgreSQL
+   * Récupère un utilisateur depuis le cache local par Firebase UID
    */
-  private async createUserPostgres(data: UserData): Promise<{ uid: string; source: 'postgres' }> {
-    const query = `
-      INSERT INTO User_ (nom, prenom, email, password, id_type_user)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id_user
-    `;
-
-    const values = [
-      data.nom,
-      data.prenom,
-      data.email,
-      data.password || 'temp_password', // À remplacer par un hash
-      data.type_user_id
-    ];
-
-    const result = await pool.query(query, values);
-    return { uid: result.rows[0].id_user.toString(), source: 'postgres' };
+  public async getUserFromCache(firebaseUid: string): Promise<any | null> {
+    try {
+      const query = `
+        SELECT id_user, firebase_uid, email, display_name, id_type_user, est_bloque, date_creation, derniere_sync
+        FROM User_ WHERE firebase_uid = $1
+      `;
+      const result = await pool.query(query, [firebaseUid]);
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error('Erreur récupération utilisateur du cache:', error);
+      return null;
+    }
   }
 
   /**
@@ -278,7 +259,7 @@ export class HybridDataService {
       const signalementResult = await pool.query(
         'SELECT COUNT(*) as count FROM Signalement WHERE est_synchronise = FALSE'
       );
-      
+
       const userResult = await pool.query(
         'SELECT COUNT(*) as count FROM User_ WHERE firebase_uid IS NULL'
       );

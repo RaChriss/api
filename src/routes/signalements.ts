@@ -1,6 +1,8 @@
 import { Router, Request, Response } from 'express';
+import { body, param, validationResult } from 'express-validator';
+import SignalementService from '../services/signalementService';
+import { authMiddleware, managerMiddleware } from '../middleware/auth';
 import pool from '../config/database';
-import { authMiddleware, managerMiddleware, userMiddleware } from '../middleware/auth';
 
 const router = Router();
 
@@ -14,298 +16,204 @@ const router = Router();
  *   get:
  *     summary: Liste de tous les signalements avec leurs détails
  *     tags: [Signalements - Visiteur]
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: integer
+ *         description: Filtrer par ID de statut
+ *       - in: query
+ *         name: date_debut
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Date de début pour le filtre
+ *       - in: query
+ *         name: date_fin
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Date de fin pour le filtre
  *     responses:
  *       200:
  *         description: Liste des signalements pour affichage sur carte
  */
 router.get('/', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const query = `
-      SELECT 
-        s.id_signalement,
-        s.description,
-        ST_X(s.location) as longitude,
-        ST_Y(s.location) as latitude,
-        s.date_signalement,
-        st.libelle as status,
-        st.couleur as status_couleur,
-        r.surface_m2,
-        r.budget,
-        r.date_debut,
-        r.date_fin_prevue,
-        r.date_fin_reelle,
-        e.nom as entreprise_nom,
-        e.telephone as entreprise_tel
-      FROM Signalement s
-      JOIN Status st ON s.id_status = st.id_status
-      LEFT JOIN Reparation r ON s.id_signalement = r.id_signalement
-      LEFT JOIN Entreprise e ON r.id_entreprise = e.id_entreprise
-      ORDER BY s.date_signalement DESC
-    `;
-    
-    const result = await pool.query(query);
-    
-    res.status(200).json({
-      success: true,
-      count: result.rows.length,
-      signalements: result.rows.map(row => ({
-        id: row.id_signalement,
-        description: row.description,
-        location: {
-          latitude: parseFloat(row.latitude),
-          longitude: parseFloat(row.longitude)
-        },
-        date_signalement: row.date_signalement,
-        status: row.status,
-        status_couleur: row.status_couleur,
-        // Infos réparation (pour le survol)
-        reparation: row.surface_m2 ? {
-          surface_m2: parseFloat(row.surface_m2),
-          budget: parseFloat(row.budget),
-          date_debut: row.date_debut,
-          date_fin_prevue: row.date_fin_prevue,
-          date_fin_reelle: row.date_fin_reelle,
-          entreprise: {
-            nom: row.entreprise_nom,
-            telephone: row.entreprise_tel
-          }
-        } : null
-      }))
-    });
-  } catch (error: any) {
-    console.error('Erreur récupération signalements:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Erreur serveur'
-    });
-  }
+    try {
+        const { status, date_debut, date_fin } = req.query;
+
+        const signalements = await SignalementService.findAll({
+            status: status ? parseInt(status as string, 10) : undefined,
+            dateDebut: date_debut as string,
+            dateFin: date_fin as string
+        });
+
+        res.status(200).json({
+            success: true,
+            count: signalements.length,
+            signalements: signalements.map(s => ({
+                id: s.id_signalement,
+                description: s.description,
+                location: s.location,
+                date_signalement: s.date_signalement,
+                status: {
+                    libelle: s.status_libelle,
+                    couleur: s.status_couleur
+                },
+                signale_par: s.user_display_name || s.user_email,
+                reparation: s.reparation ? {
+                    surface_m2: s.reparation.surface_m2,
+                    budget: s.reparation.budget,
+                    date_debut: s.reparation.date_debut,
+                    date_fin_prevue: s.reparation.date_fin_prevue,
+                    date_fin_reelle: s.reparation.date_fin_reelle,
+                    entreprise: {
+                        nom: s.reparation.entreprise_nom,
+                        telephone: s.reparation.entreprise_tel
+                    }
+                } : null
+            }))
+        });
+    } catch (error: any) {
+        console.error('Erreur récupération signalements:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur'
+        });
+    }
 });
 
 /**
  * @swagger
- * /api/signalements/{id}:
- *   get:
- *     summary: Détails complets d'un signalement (pour survol/popup)
- *     tags: [Signalements - Visiteur]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- */
-router.get('/:id', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    
-    if (isNaN(id)) {
-      res.status(400).json({ success: false, error: 'ID invalide' });
-      return;
-    }
-
-    const query = `
-      SELECT 
-        s.id_signalement,
-        s.description,
-        ST_X(s.location) as longitude,
-        ST_Y(s.location) as latitude,
-        s.date_signalement,
-        st.id_status,
-        st.libelle as status,
-        st.couleur as status_couleur,
-        r.id_reparation,
-        r.surface_m2,
-        r.budget,
-        r.date_debut,
-        r.date_fin_prevue,
-        r.date_fin_reelle,
-        r.commentaire as reparation_commentaire,
-        e.id_entreprise,
-        e.nom as entreprise_nom,
-        e.telephone as entreprise_tel,
-        e.email as entreprise_email,
-        e.adresse as entreprise_adresse,
-        u.nom as signale_par_nom,
-        u.prenom as signale_par_prenom
-      FROM Signalement s
-      JOIN Status st ON s.id_status = st.id_status
-      JOIN User_ u ON s.id_user = u.id_user
-      LEFT JOIN Reparation r ON s.id_signalement = r.id_signalement
-      LEFT JOIN Entreprise e ON r.id_entreprise = e.id_entreprise
-      WHERE s.id_signalement = $1
-    `;
-    
-    const result = await pool.query(query, [id]);
-    
-    if (result.rows.length === 0) {
-      res.status(404).json({ success: false, error: 'Signalement non trouvé' });
-      return;
-    }
-
-    const row = result.rows[0];
-    
-    res.status(200).json({
-      success: true,
-      signalement: {
-        id: row.id_signalement,
-        description: row.description,
-        location: {
-          latitude: parseFloat(row.latitude),
-          longitude: parseFloat(row.longitude)
-        },
-        date_signalement: row.date_signalement,
-        signale_par: `${row.signale_par_prenom} ${row.signale_par_nom}`,
-        status: {
-          id: row.id_status,
-          libelle: row.status,
-          couleur: row.status_couleur
-        },
-        reparation: row.id_reparation ? {
-          id: row.id_reparation,
-          surface_m2: parseFloat(row.surface_m2),
-          budget: parseFloat(row.budget),
-          date_debut: row.date_debut,
-          date_fin_prevue: row.date_fin_prevue,
-          date_fin_reelle: row.date_fin_reelle,
-          commentaire: row.reparation_commentaire,
-          entreprise: {
-            id: row.id_entreprise,
-            nom: row.entreprise_nom,
-            telephone: row.entreprise_tel,
-            email: row.entreprise_email,
-            adresse: row.entreprise_adresse
-          }
-        } : null
-      }
-    });
-  } catch (error: any) {
-    console.error('Erreur récupération signalement:', error);
-    res.status(500).json({ success: false, error: 'Erreur serveur' });
-  }
-});
-
-/**
- * @swagger
- * /api/signalements/recapitulatif:
+ * /api/signalements/stats/recapitulatif:
  *   get:
  *     summary: Tableau récapitulatif pour les visiteurs
  *     tags: [Signalements - Visiteur]
- *     description: Nb de points, total surface, avancement %, total budget
+ *     description: Statistiques globales - nb de signalements, surface, budget, avancement
+ *     responses:
+ *       200:
+ *         description: Statistiques récapitulatives
  */
 router.get('/stats/recapitulatif', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const query = `
-      SELECT 
-        -- Nombre total de signalements
-        (SELECT COUNT(*) FROM Signalement) as nb_signalements,
-        
-        -- Nombre par statut
-        (SELECT COUNT(*) FROM Signalement s 
-         JOIN Status st ON s.id_status = st.id_status 
-         WHERE st.libelle = 'Nouveau') as nb_nouveau,
-        
-        (SELECT COUNT(*) FROM Signalement s 
-         JOIN Status st ON s.id_status = st.id_status 
-         WHERE st.libelle ILIKE '%cours%') as nb_en_cours,
-        
-        (SELECT COUNT(*) FROM Signalement s 
-         JOIN Status st ON s.id_status = st.id_status 
-         WHERE st.libelle ILIKE '%termin%') as nb_termine,
-        
-        -- Surface totale en m²
-        (SELECT COALESCE(SUM(surface_m2), 0) FROM Reparation) as surface_totale_m2,
-        
-        -- Budget total
-        (SELECT COALESCE(SUM(budget), 0) FROM Reparation) as budget_total,
-        
-        -- Avancement en % (terminés / total avec réparation)
-        (SELECT 
-          CASE 
-            WHEN COUNT(*) = 0 THEN 0
-            ELSE ROUND((COUNT(CASE WHEN date_fin_reelle IS NOT NULL THEN 1 END)::DECIMAL / COUNT(*)) * 100, 2)
-          END
-         FROM Reparation) as avancement_pct,
-        
-        -- Nombre d'entreprises impliquées
-        (SELECT COUNT(DISTINCT id_entreprise) FROM Reparation) as nb_entreprises
-    `;
-    
-    const result = await pool.query(query);
-    const stats = result.rows[0];
-    
-    res.status(200).json({
-      success: true,
-      recapitulatif: {
-        signalements: {
-          total: parseInt(stats.nb_signalements),
-          nouveau: parseInt(stats.nb_nouveau),
-          en_cours: parseInt(stats.nb_en_cours),
-          termine: parseInt(stats.nb_termine)
-        },
-        surface_totale_m2: parseFloat(stats.surface_totale_m2),
-        budget_total: parseFloat(stats.budget_total),
-        avancement_pct: parseFloat(stats.avancement_pct),
-        nb_entreprises: parseInt(stats.nb_entreprises)
-      }
-    });
-  } catch (error: any) {
-    console.error('Erreur récupération récapitulatif:', error);
-    res.status(500).json({ success: false, error: 'Erreur serveur' });
-  }
-});
+    try {
+        const stats = await SignalementService.getStats();
 
-// ============================================
-// ROUTES UTILISATEUR CONNECTÉ
-// ============================================
+        res.status(200).json({
+            success: true,
+            recapitulatif: {
+                signalements: {
+                    total: stats.total,
+                    par_status: stats.par_status
+                },
+                surface_totale_m2: stats.surface_totale,
+                budget_total: stats.budget_total,
+                avancement_pct: stats.avancement_pct
+            }
+        });
+    } catch (error: any) {
+        console.error('Erreur récupération récapitulatif:', error);
+        res.status(500).json({ success: false, error: 'Erreur serveur' });
+    }
+});
 
 /**
  * @swagger
- * /api/signalements:
- *   post:
- *     summary: Créer un nouveau signalement
+ * /api/signalements/config/statuts:
+ *   get:
+ *     summary: Liste des statuts disponibles
+ *     tags: [Signalements - Configuration]
+ *     responses:
+ *       200:
+ *         description: Liste des statuts
+ */
+router.get('/config/statuts', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const result = await pool.query('SELECT * FROM Status ORDER BY id_status');
+
+        res.status(200).json({
+            success: true,
+            statuts: result.rows
+        });
+    } catch (error: any) {
+        console.error('Erreur récupération statuts:', error);
+        res.status(500).json({ success: false, error: 'Erreur serveur' });
+    }
+});
+
+/**
+ * @swagger
+ * /api/signalements/config/entreprises:
+ *   get:
+ *     summary: Liste des entreprises disponibles
+ *     tags: [Signalements - Configuration]
+ *     responses:
+ *       200:
+ *         description: Liste des entreprises
+ */
+router.get('/config/entreprises', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const result = await pool.query('SELECT * FROM Entreprise ORDER BY nom');
+
+        res.status(200).json({
+            success: true,
+            entreprises: result.rows
+        });
+    } catch (error: any) {
+        console.error('Erreur récupération entreprises:', error);
+        res.status(500).json({ success: false, error: 'Erreur serveur' });
+    }
+});
+
+/**
+ * @swagger
+ * /api/signalements/user/mes-signalements:
+ *   get:
+ *     summary: Liste des signalements de l'utilisateur connecté
  *     tags: [Signalements - Utilisateur]
  *     security:
  *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Liste des signalements de l'utilisateur
+ *       401:
+ *         description: Non authentifié
  */
-router.post('/', authMiddleware, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { description, latitude, longitude } = req.body;
-    const userId = req.user?.id;
+router.get('/user/mes-signalements', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+    try {
+        const userId = req.user?.id;
 
-    if (!latitude || !longitude) {
-      res.status(400).json({ 
-        success: false, 
-        error: 'Latitude et longitude sont requis' 
-      });
-      return;
+        if (!userId) {
+            res.status(401).json({
+                success: false,
+                error: 'Utilisateur non identifié'
+            });
+            return;
+        }
+
+        const signalements = await SignalementService.findByUserId(userId);
+
+        res.status(200).json({
+            success: true,
+            count: signalements.length,
+            signalements: signalements.map(s => ({
+                id: s.id_signalement,
+                description: s.description,
+                location: s.location,
+                date_signalement: s.date_signalement,
+                firebase_id: s.firebase_id,
+                est_synchronise: s.est_synchronise,
+                status: {
+                    id: s.id_status,
+                    libelle: s.status_libelle,
+                    couleur: s.status_couleur
+                },
+                reparation: s.reparation
+            }))
+        });
+    } catch (error: any) {
+        console.error('Erreur récupération mes signalements:', error);
+        res.status(500).json({ success: false, error: 'Erreur serveur' });
     }
-
-    // Statut par défaut = Nouveau (id = 1)
-    const query = `
-      INSERT INTO Signalement (description, location, id_user, id_status, est_synchronise)
-      VALUES ($1, ST_GeomFromText('POINT(' || $2 || ' ' || $3 || ')', 4326), $4, 1, FALSE)
-      RETURNING id_signalement, date_signalement
-    `;
-    
-    const result = await pool.query(query, [
-      description || null,
-      longitude,
-      latitude,
-      userId
-    ]);
-    
-    res.status(201).json({
-      success: true,
-      message: 'Signalement créé avec succès',
-      signalement: {
-        id: result.rows[0].id_signalement,
-        date_signalement: result.rows[0].date_signalement
-      }
-    });
-  } catch (error: any) {
-    console.error('Erreur création signalement:', error);
-    res.status(500).json({ success: false, error: 'Erreur serveur' });
-  }
 });
 
 // ============================================
@@ -320,169 +228,581 @@ router.post('/', authMiddleware, async (req: Request, res: Response): Promise<vo
  *     tags: [Signalements - Manager]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: date_debut
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: date_fin
+ *         schema:
+ *           type: string
+ *           format: date
+ *     responses:
+ *       200:
+ *         description: Liste des signalements avec détails de gestion
  */
 router.get('/manager/list', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { status, entreprise, date_debut, date_fin } = req.query;
-    
-    let query = `
-      SELECT 
-        s.id_signalement,
-        s.description,
-        s.latitude,
-        s.longitude,
-        s.date_signalement,
-        s.firebase_id,
-        s.est_synchronise,
-        st.id_status,
-        st.libelle as status,
-        st.couleur as status_couleur,
-        r.id_reparation,
-        r.surface_m2,
-        r.budget,
-        r.date_debut,
-        r.date_fin_prevue,
-        r.date_fin_reelle,
-        e.id_entreprise,
-        e.nom as entreprise_nom,
-        u.nom as user_nom,
-        u.prenom as user_prenom,
-        u.email as user_email
-      FROM Signalement s
-      JOIN Status st ON s.id_status = st.id_status
-      JOIN User_ u ON s.id_user = u.id_user
-      LEFT JOIN Reparation r ON s.id_signalement = r.id_signalement
-      LEFT JOIN Entreprise e ON r.id_entreprise = e.id_entreprise
-      WHERE 1=1
-    `;
-    
-    const params: any[] = [];
-    let paramIndex = 1;
-    
-    if (status) {
-      query += ` AND st.id_status = $${paramIndex}`;
-      params.push(status);
-      paramIndex++;
+    try {
+        const { status, date_debut, date_fin } = req.query;
+
+        const signalements = await SignalementService.findAll({
+            status: status ? parseInt(status as string, 10) : undefined,
+            dateDebut: date_debut as string,
+            dateFin: date_fin as string
+        });
+
+        res.status(200).json({
+            success: true,
+            count: signalements.length,
+            signalements
+        });
+    } catch (error: any) {
+        console.error('Erreur liste signalements manager:', error);
+        res.status(500).json({ success: false, error: 'Erreur serveur' });
     }
-    
-    if (entreprise) {
-      query += ` AND e.id_entreprise = $${paramIndex}`;
-      params.push(entreprise);
-      paramIndex++;
-    }
-    
-    if (date_debut) {
-      query += ` AND s.date_signalement >= $${paramIndex}`;
-      params.push(date_debut);
-      paramIndex++;
-    }
-    
-    if (date_fin) {
-      query += ` AND s.date_signalement <= $${paramIndex}`;
-      params.push(date_fin);
-      paramIndex++;
-    }
-    
-    query += ' ORDER BY s.date_signalement DESC';
-    
-    const result = await pool.query(query, params);
-    
-    res.status(200).json({
-      success: true,
-      count: result.rows.length,
-      signalements: result.rows
-    });
-  } catch (error: any) {
-    console.error('Erreur liste signalements manager:', error);
-    res.status(500).json({ success: false, error: 'Erreur serveur' });
-  }
 });
+
+/**
+ * @swagger
+ * /api/signalements/manager/pending-sync:
+ *   get:
+ *     summary: Liste des signalements non synchronisés avec Firebase
+ *     tags: [Signalements - Manager]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Liste des signalements en attente de synchronisation
+ */
+router.get('/manager/pending-sync', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
+    try {
+        const pending = await SignalementService.getPendingSync();
+
+        res.status(200).json({
+            success: true,
+            count: pending.length,
+            signalements: pending
+        });
+    } catch (error: any) {
+        console.error('Erreur récupération signalements non synchronisés:', error);
+        res.status(500).json({ success: false, error: 'Erreur serveur' });
+    }
+});
+
+/**
+ * @swagger
+ * /api/signalements/manager/sync:
+ *   post:
+ *     summary: Synchroniser les signalements en attente avec Firebase
+ *     tags: [Signalements - Manager]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Résultat de la synchronisation
+ */
+router.post('/manager/sync', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
+    try {
+        const result = await SignalementService.syncPendingToFirebase();
+
+        res.status(200).json({
+            success: true,
+            message: `Synchronisation terminée: ${result.synced} succès, ${result.errors} erreurs`,
+            result
+        });
+    } catch (error: any) {
+        console.error('Erreur synchronisation:', error);
+        res.status(500).json({ success: false, error: 'Erreur serveur' });
+    }
+});
+
+/**
+ * @swagger
+ * /api/signalements/{id}:
+ *   get:
+ *     summary: Détails complets d'un signalement
+ *     tags: [Signalements - Visiteur]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID du signalement
+ *     responses:
+ *       200:
+ *         description: Détails du signalement
+ *       404:
+ *         description: Signalement non trouvé
+ */
+router.get('/:id', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const id = parseInt(req.params.id, 10);
+
+        if (isNaN(id)) {
+            res.status(400).json({ success: false, error: 'ID invalide' });
+            return;
+        }
+
+        const signalement = await SignalementService.findById(id);
+
+        if (!signalement) {
+            res.status(404).json({ success: false, error: 'Signalement non trouvé' });
+            return;
+        }
+
+        res.status(200).json({
+            success: true,
+            signalement: {
+                id: signalement.id_signalement,
+                description: signalement.description,
+                location: signalement.location,
+                date_signalement: signalement.date_signalement,
+                firebase_id: signalement.firebase_id,
+                est_synchronise: signalement.est_synchronise,
+                signale_par: {
+                    display_name: signalement.user_display_name,
+                    email: signalement.user_email
+                },
+                status: {
+                    id: signalement.id_status,
+                    libelle: signalement.status_libelle,
+                    couleur: signalement.status_couleur
+                },
+                reparation: signalement.reparation
+            }
+        });
+    } catch (error: any) {
+        console.error('Erreur récupération signalement:', error);
+        res.status(500).json({ success: false, error: 'Erreur serveur' });
+    }
+});
+
+// ============================================
+// ROUTES UTILISATEUR CONNECTÉ (CRUD)
+// ============================================
+
+/**
+ * @swagger
+ * /api/signalements:
+ *   post:
+ *     summary: Créer un nouveau signalement
+ *     tags: [Signalements - Utilisateur]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - latitude
+ *               - longitude
+ *             properties:
+ *               latitude:
+ *                 type: number
+ *                 example: -18.8792
+ *               longitude:
+ *                 type: number
+ *                 example: 47.5079
+ *               description:
+ *                 type: string
+ *                 example: "Nid de poule dangereux sur la route principale"
+ *     responses:
+ *       201:
+ *         description: Signalement créé avec succès
+ *       400:
+ *         description: Données invalides
+ *       401:
+ *         description: Non authentifié
+ */
+router.post('/',
+    authMiddleware,
+    [
+        body('latitude').isFloat({ min: -90, max: 90 }).withMessage('Latitude invalide (doit être entre -90 et 90)'),
+        body('longitude').isFloat({ min: -180, max: 180 }).withMessage('Longitude invalide (doit être entre -180 et 180)'),
+        body('description').optional().isString().isLength({ max: 500 }).withMessage('Description trop longue (max 500 caractères)')
+    ],
+    async (req: Request, res: Response): Promise<void> => {
+        try {
+            // Validation des entrées
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                res.status(400).json({
+                    success: false,
+                    errors: errors.array()
+                });
+                return;
+            }
+
+            const { description, latitude, longitude } = req.body;
+            const firebaseUid = req.user?.firebase_uid;
+
+            if (!firebaseUid) {
+                res.status(401).json({
+                    success: false,
+                    error: 'Utilisateur Firebase non identifié'
+                });
+                return;
+            }
+
+            const signalement = await SignalementService.create({
+                latitude: parseFloat(latitude),
+                longitude: parseFloat(longitude),
+                description,
+                firebase_uid: firebaseUid
+            });
+
+            res.status(201).json({
+                success: true,
+                message: 'Signalement créé avec succès',
+                signalement: {
+                    id: signalement.id_signalement,
+                    location: signalement.location,
+                    description: signalement.description,
+                    date_signalement: signalement.date_signalement,
+                    firebase_id: signalement.firebase_id,
+                    est_synchronise: signalement.est_synchronise
+                }
+            });
+        } catch (error: any) {
+            console.error('Erreur création signalement:', error);
+            res.status(500).json({ success: false, error: 'Erreur serveur' });
+        }
+    }
+);
+
+/**
+ * @swagger
+ * /api/signalements/{id}:
+ *   put:
+ *     summary: Modifier un signalement (uniquement si statut "Nouveau")
+ *     tags: [Signalements - Utilisateur]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               latitude:
+ *                 type: number
+ *               longitude:
+ *                 type: number
+ *               description:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Signalement mis à jour
+ *       400:
+ *         description: Données invalides
+ *       401:
+ *         description: Non authentifié
+ *       403:
+ *         description: Non autorisé
+ *       404:
+ *         description: Signalement non trouvé
+ *       409:
+ *         description: Signalement verrouillé (en cours de traitement)
+ */
+router.put('/:id',
+    authMiddleware,
+    [
+        param('id').isInt({ min: 1 }).withMessage('ID invalide'),
+        body('latitude').optional().isFloat({ min: -90, max: 90 }).withMessage('Latitude invalide'),
+        body('longitude').optional().isFloat({ min: -180, max: 180 }).withMessage('Longitude invalide'),
+        body('description').optional().isString().isLength({ max: 500 }).withMessage('Description trop longue')
+    ],
+    async (req: Request, res: Response): Promise<void> => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                res.status(400).json({
+                    success: false,
+                    errors: errors.array()
+                });
+                return;
+            }
+
+            const id = parseInt(req.params.id, 10);
+            const userId = req.user?.id;
+            const { description, latitude, longitude } = req.body;
+
+            if (!userId) {
+                res.status(401).json({
+                    success: false,
+                    error: 'Utilisateur non identifié'
+                });
+                return;
+            }
+
+            const signalement = await SignalementService.update(id, userId, {
+                description,
+                latitude: latitude ? parseFloat(latitude) : undefined,
+                longitude: longitude ? parseFloat(longitude) : undefined
+            });
+
+            if (!signalement) {
+                res.status(404).json({ success: false, error: 'Signalement non trouvé' });
+                return;
+            }
+
+            res.status(200).json({
+                success: true,
+                message: 'Signalement mis à jour',
+                signalement
+            });
+        } catch (error: any) {
+            console.error('Erreur modification signalement:', error);
+
+            if (error.message.startsWith('UNAUTHORIZED')) {
+                res.status(403).json({ success: false, error: error.message.replace('UNAUTHORIZED: ', '') });
+                return;
+            }
+
+            if (error.message.startsWith('LOCKED')) {
+                res.status(409).json({ success: false, error: error.message.replace('LOCKED: ', '') });
+                return;
+            }
+
+            res.status(500).json({ success: false, error: 'Erreur serveur' });
+        }
+    }
+);
+
+/**
+ * @swagger
+ * /api/signalements/{id}:
+ *   delete:
+ *     summary: Supprimer un signalement (uniquement si statut "Nouveau")
+ *     tags: [Signalements - Utilisateur]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Signalement supprimé
+ *       401:
+ *         description: Non authentifié
+ *       403:
+ *         description: Non autorisé
+ *       404:
+ *         description: Signalement non trouvé
+ *       409:
+ *         description: Signalement verrouillé (en cours de traitement)
+ */
+router.delete('/:id',
+    authMiddleware,
+    [param('id').isInt({ min: 1 }).withMessage('ID invalide')],
+    async (req: Request, res: Response): Promise<void> => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                res.status(400).json({
+                    success: false,
+                    errors: errors.array()
+                });
+                return;
+            }
+
+            const id = parseInt(req.params.id, 10);
+            const userId = req.user?.id;
+
+            if (!userId) {
+                res.status(401).json({
+                    success: false,
+                    error: 'Utilisateur non identifié'
+                });
+                return;
+            }
+
+            const deleted = await SignalementService.delete(id, userId);
+
+            if (!deleted) {
+                res.status(404).json({ success: false, error: 'Signalement non trouvé' });
+                return;
+            }
+
+            res.status(200).json({
+                success: true,
+                message: 'Signalement supprimé avec succès'
+            });
+        } catch (error: any) {
+            console.error('Erreur suppression signalement:', error);
+
+            if (error.message.startsWith('UNAUTHORIZED')) {
+                res.status(403).json({ success: false, error: error.message.replace('UNAUTHORIZED: ', '') });
+                return;
+            }
+
+            if (error.message.startsWith('LOCKED')) {
+                res.status(409).json({ success: false, error: error.message.replace('LOCKED: ', '') });
+                return;
+            }
+
+            res.status(500).json({ success: false, error: 'Erreur serveur' });
+        }
+    }
+);
+
+// ============================================
+// ROUTES MANAGER - RÉPARATION
+// ============================================
 
 /**
  * @swagger
  * /api/signalements/{id}/reparation:
  *   post:
- *     summary: Créer/Modifier les infos de réparation (surface, budget, entreprise)
+ *     summary: Créer/Modifier les infos de réparation
  *     tags: [Signalements - Manager]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               surface_m2:
+ *                 type: number
+ *                 example: 25.5
+ *               budget:
+ *                 type: number
+ *                 example: 1500000
+ *               id_entreprise:
+ *                 type: integer
+ *                 example: 1
+ *               date_debut:
+ *                 type: string
+ *                 format: date
+ *               date_fin_prevue:
+ *                 type: string
+ *                 format: date
+ *               commentaire:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Réparation mise à jour
+ *       201:
+ *         description: Réparation créée
+ *       404:
+ *         description: Signalement non trouvé
  */
-router.post('/:id/reparation', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const signalementId = parseInt(req.params.id, 10);
-    const { surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire } = req.body;
-    const managerId = req.user?.id;
+router.post('/:id/reparation',
+    authMiddleware,
+    managerMiddleware,
+    [
+        param('id').isInt({ min: 1 }).withMessage('ID signalement invalide'),
+        body('surface_m2').optional().isFloat({ min: 0 }).withMessage('Surface invalide'),
+        body('budget').optional().isFloat({ min: 0 }).withMessage('Budget invalide'),
+        body('id_entreprise').optional().isInt({ min: 1 }).withMessage('ID entreprise invalide'),
+        body('date_debut').optional().isISO8601().withMessage('Date début invalide'),
+        body('date_fin_prevue').optional().isISO8601().withMessage('Date fin prévue invalide'),
+        body('commentaire').optional().isString().withMessage('Commentaire invalide')
+    ],
+    async (req: Request, res: Response): Promise<void> => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                res.status(400).json({
+                    success: false,
+                    errors: errors.array()
+                });
+                return;
+            }
 
-    if (isNaN(signalementId)) {
-      res.status(400).json({ success: false, error: 'ID signalement invalide' });
-      return;
+            const signalementId = parseInt(req.params.id, 10);
+            const { surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire } = req.body;
+            const managerId = req.user?.id;
+
+            // Vérifier que le signalement existe
+            const signalement = await SignalementService.findById(signalementId);
+
+            if (!signalement) {
+                res.status(404).json({ success: false, error: 'Signalement non trouvé' });
+                return;
+            }
+
+            // Vérifier si une réparation existe déjà
+            const existingResult = await pool.query(
+                'SELECT id_reparation FROM Reparation WHERE id_signalement = $1',
+                [signalementId]
+            );
+
+            let result;
+
+            if (existingResult.rows.length > 0) {
+                // Mise à jour
+                result = await pool.query(`
+          UPDATE Reparation 
+          SET surface_m2 = COALESCE($1, surface_m2),
+              budget = COALESCE($2, budget),
+              id_entreprise = COALESCE($3, id_entreprise),
+              date_debut = COALESCE($4, date_debut),
+              date_fin_prevue = COALESCE($5, date_fin_prevue),
+              commentaire = COALESCE($6, commentaire),
+              date_modification = CURRENT_TIMESTAMP
+          WHERE id_signalement = $7
+          RETURNING *
+        `, [surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, signalementId]);
+
+                res.status(200).json({
+                    success: true,
+                    message: 'Réparation mise à jour',
+                    reparation: result.rows[0]
+                });
+            } else {
+                // Création - statut "En cours" par défaut (id = 2)
+                result = await pool.query(`
+          INSERT INTO Reparation 
+          (surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, id_signalement, id_status, id_user)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, 2, $8)
+          RETURNING *
+        `, [surface_m2 || 0, budget || 0, id_entreprise || 1, date_debut, date_fin_prevue, commentaire, signalementId, managerId]);
+
+                // Mettre à jour le statut du signalement à "En cours"
+                await pool.query(
+                    'UPDATE Signalement SET id_status = 2 WHERE id_signalement = $1',
+                    [signalementId]
+                );
+
+                res.status(201).json({
+                    success: true,
+                    message: 'Réparation créée',
+                    reparation: result.rows[0]
+                });
+            }
+        } catch (error: any) {
+            console.error('Erreur gestion réparation:', error);
+            res.status(500).json({ success: false, error: 'Erreur serveur' });
+        }
     }
-
-    // Vérifier que le signalement existe
-    const checkSignalement = await pool.query(
-      'SELECT id_signalement FROM Signalement WHERE id_signalement = $1',
-      [signalementId]
-    );
-    
-    if (checkSignalement.rows.length === 0) {
-      res.status(404).json({ success: false, error: 'Signalement non trouvé' });
-      return;
-    }
-
-    // Vérifier si une réparation existe déjà
-    const existingReparation = await pool.query(
-      'SELECT id_reparation FROM Reparation WHERE id_signalement = $1',
-      [signalementId]
-    );
-
-    let result;
-    
-    if (existingReparation.rows.length > 0) {
-      // Mise à jour
-      result = await pool.query(`
-        UPDATE Reparation 
-        SET surface_m2 = COALESCE($1, surface_m2),
-            budget = COALESCE($2, budget),
-            id_entreprise = COALESCE($3, id_entreprise),
-            date_debut = COALESCE($4, date_debut),
-            date_fin_prevue = COALESCE($5, date_fin_prevue),
-            commentaire = COALESCE($6, commentaire),
-            date_modification = CURRENT_TIMESTAMP
-        WHERE id_signalement = $7
-        RETURNING *
-      `, [surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, signalementId]);
-      
-      res.status(200).json({
-        success: true,
-        message: 'Réparation mise à jour',
-        reparation: result.rows[0]
-      });
-    } else {
-      // Création - statut "En cours" par défaut (id = 2)
-      result = await pool.query(`
-        INSERT INTO Reparation 
-        (surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, id_signalement, id_status, id_user)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 2, $8)
-        RETURNING *
-      `, [surface_m2 || 0, budget || 0, id_entreprise, date_debut, date_fin_prevue, commentaire, signalementId, managerId]);
-      
-      // Mettre à jour le statut du signalement à "En cours"
-      await pool.query(
-        'UPDATE Signalement SET id_status = 2 WHERE id_signalement = $1',
-        [signalementId]
-      );
-      
-      res.status(201).json({
-        success: true,
-        message: 'Réparation créée',
-        reparation: result.rows[0]
-      });
-    }
-  } catch (error: any) {
-    console.error('Erreur gestion réparation:', error);
-    res.status(500).json({ success: false, error: 'Erreur serveur' });
-  }
-});
+);
 
 /**
  * @swagger
@@ -492,125 +812,188 @@ router.post('/:id/reparation', authMiddleware, managerMiddleware, async (req: Re
  *     tags: [Signalements - Manager]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - id_status
+ *             properties:
+ *               id_status:
+ *                 type: integer
+ *                 example: 2
+ *               commentaire:
+ *                 type: string
+ *                 example: "Travaux démarrés"
+ *     responses:
+ *       200:
+ *         description: Statut mis à jour
+ *       404:
+ *         description: Signalement non trouvé
  */
-router.put('/:id/status', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const signalementId = parseInt(req.params.id, 10);
-    const { id_status, commentaire } = req.body;
-    const managerId = req.user?.id;
+router.put('/:id/status',
+    authMiddleware,
+    managerMiddleware,
+    [
+        param('id').isInt({ min: 1 }).withMessage('ID signalement invalide'),
+        body('id_status').isInt({ min: 1, max: 3 }).withMessage('ID statut invalide (1-3)'),
+        body('commentaire').optional().isString().withMessage('Commentaire invalide')
+    ],
+    async (req: Request, res: Response): Promise<void> => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                res.status(400).json({
+                    success: false,
+                    errors: errors.array()
+                });
+                return;
+            }
 
-    if (isNaN(signalementId) || !id_status) {
-      res.status(400).json({ success: false, error: 'ID signalement et statut requis' });
-      return;
+            const signalementId = parseInt(req.params.id, 10);
+            const { id_status, commentaire } = req.body;
+            const managerId = req.user?.id;
+
+            // Récupérer l'ancien statut
+            const oldStatusResult = await pool.query(
+                'SELECT id_status FROM Signalement WHERE id_signalement = $1',
+                [signalementId]
+            );
+
+            if (oldStatusResult.rows.length === 0) {
+                res.status(404).json({ success: false, error: 'Signalement non trouvé' });
+                return;
+            }
+
+            const oldStatus = oldStatusResult.rows[0].id_status;
+
+            // Mettre à jour le statut du signalement
+            await pool.query(
+                'UPDATE Signalement SET id_status = $1 WHERE id_signalement = $2',
+                [id_status, signalementId]
+            );
+
+            // Mettre à jour le statut de la réparation si elle existe
+            const reparationResult = await pool.query(
+                'SELECT id_reparation FROM Reparation WHERE id_signalement = $1',
+                [signalementId]
+            );
+
+            if (reparationResult.rows.length > 0) {
+                const reparationId = reparationResult.rows[0].id_reparation;
+
+                // Mettre à jour le statut de la réparation
+                await pool.query(
+                    'UPDATE Reparation SET id_status = $1, date_modification = CURRENT_TIMESTAMP WHERE id_reparation = $2',
+                    [id_status, reparationId]
+                );
+
+                // Enregistrer dans l'historique
+                await pool.query(`
+          INSERT INTO HistoriqueStatus 
+          (id_reparation, id_status_ancien, id_status_nouveau, id_user, commentaire)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [reparationId, oldStatus, id_status, managerId, commentaire || null]);
+
+                // Si terminé (id_status = 3), mettre la date de fin réelle
+                if (id_status === 3) {
+                    await pool.query(
+                        'UPDATE Reparation SET date_fin_reelle = CURRENT_DATE WHERE id_reparation = $1',
+                        [reparationId]
+                    );
+                }
+            }
+
+            res.status(200).json({
+                success: true,
+                message: 'Statut mis à jour',
+                old_status: oldStatus,
+                new_status: id_status
+            });
+        } catch (error: any) {
+            console.error('Erreur modification statut:', error);
+            res.status(500).json({ success: false, error: 'Erreur serveur' });
+        }
     }
-
-    // Récupérer l'ancien statut
-    const oldStatusResult = await pool.query(
-      'SELECT id_status FROM Signalement WHERE id_signalement = $1',
-      [signalementId]
-    );
-    
-    if (oldStatusResult.rows.length === 0) {
-      res.status(404).json({ success: false, error: 'Signalement non trouvé' });
-      return;
-    }
-    
-    const oldStatus = oldStatusResult.rows[0].id_status;
-
-    // Mettre à jour le statut du signalement
-    await pool.query(
-      'UPDATE Signalement SET id_status = $1 WHERE id_signalement = $2',
-      [id_status, signalementId]
-    );
-
-    // Mettre à jour le statut de la réparation si elle existe
-    const reparationResult = await pool.query(
-      'SELECT id_reparation FROM Reparation WHERE id_signalement = $1',
-      [signalementId]
-    );
-    
-    if (reparationResult.rows.length > 0) {
-      const reparationId = reparationResult.rows[0].id_reparation;
-      
-      // Mettre à jour le statut de la réparation
-      await pool.query(
-        'UPDATE Reparation SET id_status = $1, date_modification = CURRENT_TIMESTAMP WHERE id_reparation = $2',
-        [id_status, reparationId]
-      );
-
-      // Enregistrer dans l'historique
-      await pool.query(`
-        INSERT INTO HistoriqueStatus 
-        (id_reparation, id_status_ancien, id_status_nouveau, id_user, commentaire)
-        VALUES ($1, $2, $3, $4, $5)
-      `, [reparationId, oldStatus, id_status, managerId, commentaire || null]);
-
-      // Si terminé, mettre la date de fin réelle
-      const statusResult = await pool.query(
-        'SELECT libelle FROM Status WHERE id_status = $1',
-        [id_status]
-      );
-      
-      if (statusResult.rows[0]?.libelle?.toLowerCase().includes('termin')) {
-        await pool.query(
-          'UPDATE Reparation SET date_fin_reelle = CURRENT_DATE WHERE id_reparation = $1',
-          [reparationId]
-        );
-      }
-    }
-
-    res.status(200).json({
-      success: true,
-      message: 'Statut mis à jour',
-      old_status: oldStatus,
-      new_status: id_status
-    });
-  } catch (error: any) {
-    console.error('Erreur modification statut:', error);
-    res.status(500).json({ success: false, error: 'Erreur serveur' });
-  }
-});
+);
 
 /**
  * @swagger
- * /api/signalements/statuts:
+ * /api/signalements/{id}/historique:
  *   get:
- *     summary: Liste des statuts disponibles
- *     tags: [Signalements]
+ *     summary: Historique des modifications de statut d'un signalement
+ *     tags: [Signalements - Manager]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Historique des modifications
  */
-router.get('/config/statuts', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const result = await pool.query('SELECT * FROM Status ORDER BY id_status');
-    
-    res.status(200).json({
-      success: true,
-      statuts: result.rows
-    });
-  } catch (error: any) {
-    console.error('Erreur récupération statuts:', error);
-    res.status(500).json({ success: false, error: 'Erreur serveur' });
-  }
-});
+router.get('/:id/historique', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+    try {
+        const signalementId = parseInt(req.params.id, 10);
 
-/**
- * @swagger
- * /api/signalements/entreprises:
- *   get:
- *     summary: Liste des entreprises disponibles
- *     tags: [Signalements]
- */
-router.get('/config/entreprises', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const result = await pool.query('SELECT * FROM Entreprise ORDER BY nom');
-    
-    res.status(200).json({
-      success: true,
-      entreprises: result.rows
-    });
-  } catch (error: any) {
-    console.error('Erreur récupération entreprises:', error);
-    res.status(500).json({ success: false, error: 'Erreur serveur' });
-  }
+        if (isNaN(signalementId)) {
+            res.status(400).json({ success: false, error: 'ID invalide' });
+            return;
+        }
+
+        const result = await pool.query(`
+      SELECT 
+        h.id_historique,
+        h.date_modification,
+        h.commentaire,
+        sa.libelle as ancien_status,
+        sa.couleur as ancien_couleur,
+        sn.libelle as nouveau_status,
+        sn.couleur as nouveau_couleur,
+        u.nom as modifie_par_nom,
+        u.prenom as modifie_par_prenom
+      FROM HistoriqueStatus h
+      JOIN Reparation r ON h.id_reparation = r.id_reparation
+      LEFT JOIN Status sa ON h.id_status_ancien = sa.id_status
+      JOIN Status sn ON h.id_status_nouveau = sn.id_status
+      JOIN User_ u ON h.id_user = u.id_user
+      WHERE r.id_signalement = $1
+      ORDER BY h.date_modification DESC
+    `, [signalementId]);
+
+        res.status(200).json({
+            success: true,
+            count: result.rows.length,
+            historique: result.rows.map(row => ({
+                id: row.id_historique,
+                date: row.date_modification,
+                commentaire: row.commentaire,
+                ancien_status: row.ancien_status ? {
+                    libelle: row.ancien_status,
+                    couleur: row.ancien_couleur
+                } : null,
+                nouveau_status: {
+                    libelle: row.nouveau_status,
+                    couleur: row.nouveau_couleur
+                },
+                modifie_par: `${row.modifie_par_prenom || ''} ${row.modifie_par_nom || ''}`.trim()
+            }))
+        });
+    } catch (error: any) {
+        console.error('Erreur récupération historique:', error);
+        res.status(500).json({ success: false, error: 'Erreur serveur' });
+    }
 });
 
 export default router;

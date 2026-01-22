@@ -93,29 +93,56 @@ async function initializeAllFirebaseCollections() {
             const ref = db.collection('Status').doc(status.id.toString());
             batch.set(ref, status);
         });
-        // 3. Créer les paramètres par type d'utilisateur
+        // 3. Créer les paramètres globaux (structure nom/valeur/type)
         console.log('📁 Création de la collection Parametre...');
         const parametresData = [
             {
                 id: 1,
-                nom: 'Paramètres Visiteur',
-                limite_tentatives: 3,
-                duree_session: 3600,
-                id_type_user: 1
+                nom: 'max_tentatives_connexion',
+                valeur: '5',
+                type: 'number',
+                description: 'Nombre maximum de tentatives de connexion avant blocage',
+                date_modification: admin.firestore.Timestamp.now()
             },
             {
                 id: 2,
-                nom: 'Paramètres Utilisateur',
-                limite_tentatives: 3,
-                duree_session: 7200,
-                id_type_user: 2
+                nom: 'duree_blocage_minutes',
+                valeur: '15',
+                type: 'number',
+                description: 'Durée du blocage après trop de tentatives (en minutes)',
+                date_modification: admin.firestore.Timestamp.now()
             },
             {
                 id: 3,
-                nom: 'Paramètres Manager',
-                limite_tentatives: 5,
-                duree_session: 14400,
-                id_type_user: 3
+                nom: 'session_expiration_heures',
+                valeur: '24',
+                type: 'number',
+                description: 'Durée de validité des sessions (en heures)',
+                date_modification: admin.firestore.Timestamp.now()
+            },
+            {
+                id: 4,
+                nom: 'refresh_token_expiration_jours',
+                valeur: '30',
+                type: 'number',
+                description: 'Durée de validité des refresh tokens (en jours)',
+                date_modification: admin.firestore.Timestamp.now()
+            },
+            {
+                id: 5,
+                nom: 'maintenance_mode',
+                valeur: 'false',
+                type: 'boolean',
+                description: 'Mode maintenance activé',
+                date_modification: admin.firestore.Timestamp.now()
+            },
+            {
+                id: 6,
+                nom: 'app_version',
+                valeur: '1.0.0',
+                type: 'string',
+                description: 'Version actuelle de l\'application',
+                date_modification: admin.firestore.Timestamp.now()
             }
         ];
         parametresData.forEach(parametre => {
@@ -200,14 +227,14 @@ async function initializeAllFirebaseCollections() {
         console.log('\n📋 Collections créées:');
         console.log('  - TypeUser (3 documents)');
         console.log('  - Status (3 documents)');
-        console.log('  - Parametre (3 documents)');
+        console.log('  - Parametre (6 documents: max_tentatives, duree_blocage, session_expiration, etc.)');
         console.log('  - Entreprise (1 document)');
         console.log('  - User_ (1 document manager)');
         console.log('  - Signalement (vide)');
         console.log('  - Reparation (vide)');
         console.log('  - HistoriqueStatus (vide)');
-        console.log('  - TentativeConnexion (vide)');
-        console.log('  - Session (vide)');
+        console.log('  - TentativeConnexion (vide - suivi par email)');
+        console.log('  - Session (vide - avec refresh_token, ip_address, user_agent)');
     }
     catch (error) {
         console.error('❌ Erreur lors de l\'initialisation des collections:', error);
