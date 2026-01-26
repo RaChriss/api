@@ -21,12 +21,12 @@ CREATE TABLE Status (
 -- Table des utilisateurs (synchronisée avec Firebase Auth)
 CREATE TABLE User_ (
     Id_user SERIAL PRIMARY KEY,
-    display_name VARCHAR(100),  -- Nom d'affichage (depuis Firebase)
+    display_name VARCHAR(100), -- Nom d'affichage (depuis Firebase)
     email VARCHAR(100) UNIQUE NOT NULL,
-    password VARCHAR(255),  -- Mot de passe pour mode hors ligne (optionnel)
-    firebase_uid VARCHAR(128) UNIQUE,  -- UID Firebase pour synchronisation
+    password VARCHAR(255), -- Mot de passe pour mode hors ligne (optionnel)
+    firebase_uid VARCHAR(128) UNIQUE, -- UID Firebase pour synchronisation
     date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    derniere_sync TIMESTAMP,  -- Dernière synchronisation avec Firebase
+    derniere_sync TIMESTAMP, -- Dernière synchronisation avec Firebase
     est_bloque BOOLEAN DEFAULT FALSE,
     Id_type_user INT NOT NULL,
     FOREIGN KEY (Id_type_user) REFERENCES TypeUser (Id_type_user)
