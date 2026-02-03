@@ -37,12 +37,24 @@ export declare class LoginAttemptService {
     static shouldBlockEmail(email: string): Promise<boolean>;
     /**
      * Vérifie le blocage avec les paramètres
+     * Retourne aussi si l'utilisateur est un manager (non bloçable)
      */
     static checkBlocking(email: string): Promise<{
         isBlocked: boolean;
+        isManager: boolean;
+        isPermanentlyBlocked: boolean;
         attempts: number;
         maxAttempts: number;
         remainingAttempts: number;
+    }>;
+    /**
+     * Bloque automatiquement un utilisateur après trop de tentatives
+     * Note: Les managers (type 3) ne peuvent pas être bloqués automatiquement
+     * @returns true si l'utilisateur a été bloqué, false sinon (manager ou utilisateur introuvable)
+     */
+    static autoBlockUserIfNeeded(email: string): Promise<{
+        blocked: boolean;
+        reason: string;
     }>;
     /**
      * Réinitialise les tentatives de connexion pour un email

@@ -416,16 +416,34 @@ router.post('/login', [
         const ipAddress = req.ip || req.socket.remoteAddress;
         const userAgent = req.headers['user-agent'];
         const isOnline = await hybridDataService_1.hybridDataService.isFirebaseAvailable();
-        // ===== Vérifier si l'email est bloqué (trop de tentatives) =====
+        // ===== Vérifier si l'utilisateur est bloqué de manière permanente =====
+        const existingUser = await userService_1.default.findByEmail(email);
+        if (existingUser?.est_bloque) {
+            res.status(403).json({
+                success: false,
+                error: 'Votre compte est bloqué. Contactez un administrateur.',
+                blocked: true,
+                reason: 'permanent'
+            });
+            return;
+        }
+        // ===== Vérifier si l'email est bloqué temporairement (trop de tentatives) =====
         const blockInfo = await loginAttemptService_1.LoginAttemptService.checkBlocking(email);
-        if (blockInfo.isBlocked) {
+        // Les managers ne sont jamais bloqués par les tentatives
+        if (blockInfo.isBlocked && !blockInfo.isManager) {
+            // Bloquer automatiquement le compte de l'utilisateur
+            const autoBlockResult = await loginAttemptService_1.LoginAttemptService.autoBlockUserIfNeeded(email);
             res.status(429).json({
                 success: false,
-                error: 'Compte temporairement bloqué suite à trop de tentatives',
+                error: autoBlockResult.blocked
+                    ? 'Compte bloqué suite à trop de tentatives de connexion. Contactez un administrateur.'
+                    : 'Compte temporairement bloqué suite à trop de tentatives',
+                blocked: autoBlockResult.blocked,
                 details: {
                     tentatives: blockInfo.attempts,
                     max_tentatives: blockInfo.maxAttempts,
-                    tentatives_restantes: blockInfo.remainingAttempts
+                    compte_bloque: autoBlockResult.blocked,
+                    raison: autoBlockResult.reason
                 }
             });
             return;

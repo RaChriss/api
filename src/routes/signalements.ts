@@ -3,8 +3,123 @@ import { body, param, validationResult } from 'express-validator';
 import SignalementService from '../services/signalementService';
 import { authMiddleware, managerMiddleware } from '../middleware/auth';
 import pool from '../config/database';
+import { hybridDataService } from '../services/hybridDataService';
+import { getFirestore } from '../config/firebase';
+import * as admin from 'firebase-admin';
 
 const router = Router();
+
+// ============================================
+// HELPER: Sync Reparation to Firebase
+// ============================================
+
+async function syncReparationToFirebase(reparation: any, signalementId: number): Promise<boolean> {
+    const isOnline = await hybridDataService.isFirebaseAvailable();
+    if (!isOnline) {
+        console.log('💾 Mode hors ligne : réparation créée/mise à jour localement (à synchroniser)');
+        return false;
+    }
+
+    try {
+        const db = getFirestore();
+        const reparationData = {
+            id_reparation: reparation.id_reparation,
+            id_signalement: signalementId,
+            surface_m2: reparation.surface_m2 || 0,
+            budget: reparation.budget || 0,
+            id_entreprise: reparation.id_entreprise,
+            id_status: reparation.id_status,
+            date_debut: reparation.date_debut || null,
+            date_fin_prevue: reparation.date_fin_prevue || null,
+            date_fin_reelle: reparation.date_fin_reelle || null,
+            commentaire: reparation.commentaire || null,
+            id_user: reparation.id_user,
+            updated_at: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        // Utiliser l'id_reparation comme ID du document pour faciliter les mises à jour
+        const docRef = db.collection('reparations').doc(reparation.id_reparation.toString());
+        const docSnapshot = await docRef.get();
+
+        if (docSnapshot.exists) {
+            await docRef.update(reparationData);
+            console.log(`✅ Réparation ${reparation.id_reparation} mise à jour dans Firebase`);
+        } else {
+            await docRef.set({
+                ...reparationData,
+                created_at: admin.firestore.FieldValue.serverTimestamp()
+            });
+            console.log(`✅ Réparation ${reparation.id_reparation} créée dans Firebase`);
+        }
+
+        // Marquer comme synchronisée dans PostgreSQL
+        await pool.query(
+            `UPDATE Reparation 
+             SET est_synchronise = TRUE, 
+                 firebase_id = $1,
+                 derniere_sync = CURRENT_TIMESTAMP 
+             WHERE id_reparation = $2`,
+            [reparation.id_reparation.toString(), reparation.id_reparation]
+        );
+
+        // Marquer aussi le signalement comme synchronisé
+        await pool.query(
+            'UPDATE Signalement SET est_synchronise = TRUE WHERE id_signalement = $1',
+            [signalementId]
+        );
+
+        return true;
+    } catch (error) {
+        console.warn('⚠️ Erreur sync réparation Firebase:', (error as Error).message);
+        return false;
+    }
+}
+
+// ============================================
+// HELPER: Sync HistoriqueStatus to Firebase
+// ============================================
+
+async function syncHistoriqueStatusToFirebase(historique: any): Promise<boolean> {
+    const isOnline = await hybridDataService.isFirebaseAvailable();
+    if (!isOnline) {
+        console.log('💾 Mode hors ligne : historique status créé localement (à synchroniser)');
+        return false;
+    }
+
+    try {
+        const db = getFirestore();
+        const historiqueData = {
+            id_historique: historique.id_historique,
+            id_reparation: historique.id_reparation,
+            id_status_ancien: historique.id_status_ancien || null,
+            id_status_nouveau: historique.id_status_nouveau,
+            id_user: historique.id_user,
+            date_modification: historique.date_modification || null,
+            commentaire: historique.commentaire || null,
+            updated_at: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        // Utiliser l'id_historique comme ID du document
+        const docRef = db.collection('historique_status').doc(historique.id_historique.toString());
+        const docSnapshot = await docRef.get();
+
+        if (docSnapshot.exists) {
+            await docRef.update(historiqueData);
+            console.log(`✅ Historique status ${historique.id_historique} mis à jour dans Firebase`);
+        } else {
+            await docRef.set({
+                ...historiqueData,
+                created_at: admin.firestore.FieldValue.serverTimestamp()
+            });
+            console.log(`✅ Historique status ${historique.id_historique} créé dans Firebase`);
+        }
+
+        return true;
+    } catch (error) {
+        console.warn('⚠️ Erreur sync historique status Firebase:', (error as Error).message);
+        return false;
+    }
+}
 
 // ============================================
 // ROUTES PUBLIQUES (Visiteurs)
@@ -299,26 +414,82 @@ router.get('/manager/pending-sync', authMiddleware, managerMiddleware, async (re
  * @swagger
  * /api/signalements/manager/sync:
  *   post:
- *     summary: Synchroniser les signalements en attente avec Firebase
+ *     summary: Synchronisation bidirectionnelle des signalements et réparations avec Firebase
+ *     description: |
+ *       Effectue une synchronisation complète entre PostgreSQL et Firebase:
+ *       - Envoie les données locales non synchronisées vers Firebase
+ *       - Récupère les nouvelles données de Firebase vers PostgreSQL
  *     tags: [Signalements - Manager]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Résultat de la synchronisation
+ *         description: Résultat de la synchronisation bidirectionnelle
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 result:
+ *                   type: object
+ *                   properties:
+ *                     toFirebase:
+ *                       type: object
+ *                       properties:
+ *                         signalements:
+ *                           type: integer
+ *                         reparations:
+ *                           type: integer
+ *                         errors:
+ *                           type: integer
+ *                     fromFirebase:
+ *                       type: object
+ *                       properties:
+ *                         signalements:
+ *                           type: integer
+ *                         reparations:
+ *                           type: integer
+ *                         errors:
+ *                           type: integer
  */
 router.post('/manager/sync', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
     try {
-        const result = await SignalementService.syncPendingToFirebase();
+        // Vérifier si Firebase est disponible
+        const isOnline = await hybridDataService.isFirebaseAvailable();
+
+        if (!isOnline) {
+            res.status(503).json({
+                success: false,
+                error: 'Firebase non disponible. Synchronisation impossible.',
+                offline: true
+            });
+            return;
+        }
+
+        // Effectuer la synchronisation bidirectionnelle
+        const result = await SignalementService.syncBidirectional();
+
+        const totalToFirebase = result.toFirebase.signalements + result.toFirebase.reparations + result.toFirebase.historiques;
+        const totalFromFirebase = result.fromFirebase.signalements + result.fromFirebase.reparations + result.fromFirebase.historiques;
+        const totalErrors = result.toFirebase.errors + result.fromFirebase.errors;
 
         res.status(200).json({
             success: true,
-            message: `Synchronisation terminée: ${result.synced} succès, ${result.errors} erreurs`,
-            result
+            message: `Synchronisation terminée: ${totalToFirebase} envoyés vers Firebase, ${totalFromFirebase} importés depuis Firebase, ${totalErrors} erreurs`,
+            result,
+            summary: {
+                sent_to_firebase: totalToFirebase,
+                received_from_firebase: totalFromFirebase,
+                total_errors: totalErrors
+            }
         });
     } catch (error: any) {
         console.error('Erreur synchronisation:', error);
-        res.status(500).json({ success: false, error: 'Erreur serveur' });
+        res.status(500).json({ success: false, error: 'Erreur serveur lors de la synchronisation' });
     }
 });
 
@@ -757,7 +928,7 @@ router.post('/:id/reparation',
             let result;
 
             if (existingResult.rows.length > 0) {
-                // Mise à jour
+                // Mise à jour - marquer comme non synchronisé
                 result = await pool.query(`
           UPDATE Reparation 
           SET surface_m2 = COALESCE($1, surface_m2),
@@ -766,10 +937,20 @@ router.post('/:id/reparation',
               date_debut = COALESCE($4, date_debut),
               date_fin_prevue = COALESCE($5, date_fin_prevue),
               commentaire = COALESCE($6, commentaire),
-              date_modification = CURRENT_TIMESTAMP
+              date_modification = CURRENT_TIMESTAMP,
+              est_synchronise = FALSE
           WHERE id_signalement = $7
           RETURNING *
         `, [surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, signalementId]);
+
+                // Marquer le signalement comme non synchronisé aussi
+                await pool.query(
+                    'UPDATE Signalement SET est_synchronise = FALSE WHERE id_signalement = $1',
+                    [signalementId]
+                );
+
+                // Tenter de synchroniser avec Firebase
+                await syncReparationToFirebase(result.rows[0], signalementId);
 
                 res.status(200).json({
                     success: true,
@@ -777,19 +958,22 @@ router.post('/:id/reparation',
                     reparation: result.rows[0]
                 });
             } else {
-                // Création - statut "En cours" par défaut (id = 2)
+                // Création - statut "En cours" par défaut (id = 2), non synchronisé
                 result = await pool.query(`
           INSERT INTO Reparation 
-          (surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, id_signalement, id_status, id_user)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, 2, $8)
+          (surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, id_signalement, id_status, id_user, est_synchronise)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, 2, $8, FALSE)
           RETURNING *
         `, [surface_m2 || 0, budget || 0, id_entreprise || 1, date_debut, date_fin_prevue, commentaire, signalementId, managerId]);
 
-                // Mettre à jour le statut du signalement à "En cours"
+                // Mettre à jour le statut du signalement à "En cours" et marquer non synchronisé
                 await pool.query(
-                    'UPDATE Signalement SET id_status = 2 WHERE id_signalement = $1',
+                    'UPDATE Signalement SET id_status = 2, est_synchronise = FALSE WHERE id_signalement = $1',
                     [signalementId]
                 );
+
+                // Synchroniser avec Firebase
+                await syncReparationToFirebase(result.rows[0], signalementId);
 
                 res.status(201).json({
                     success: true,
@@ -875,9 +1059,9 @@ router.put('/:id/status',
 
             const oldStatus = oldStatusResult.rows[0].id_status;
 
-            // Mettre à jour le statut du signalement
+            // Mettre à jour le statut du signalement et marquer non synchronisé
             await pool.query(
-                'UPDATE Signalement SET id_status = $1 WHERE id_signalement = $2',
+                'UPDATE Signalement SET id_status = $1, est_synchronise = FALSE WHERE id_signalement = $2',
                 [id_status, signalementId]
             );
 
@@ -890,18 +1074,24 @@ router.put('/:id/status',
             if (reparationResult.rows.length > 0) {
                 const reparationId = reparationResult.rows[0].id_reparation;
 
-                // Mettre à jour le statut de la réparation
+                // Mettre à jour le statut de la réparation et marquer non synchronisé
                 await pool.query(
-                    'UPDATE Reparation SET id_status = $1, date_modification = CURRENT_TIMESTAMP WHERE id_reparation = $2',
+                    'UPDATE Reparation SET id_status = $1, date_modification = CURRENT_TIMESTAMP, est_synchronise = FALSE WHERE id_reparation = $2',
                     [id_status, reparationId]
                 );
 
                 // Enregistrer dans l'historique
-                await pool.query(`
+                const historiqueResult = await pool.query(`
           INSERT INTO HistoriqueStatus 
           (id_reparation, id_status_ancien, id_status_nouveau, id_user, commentaire)
           VALUES ($1, $2, $3, $4, $5)
+          RETURNING id_historique, id_reparation, id_status_ancien, id_status_nouveau, id_user, date_modification, commentaire
         `, [reparationId, oldStatus, id_status, managerId, commentaire || null]);
+
+                // Synchroniser l'historique vers Firebase
+                if (historiqueResult.rows.length > 0) {
+                    await syncHistoriqueStatusToFirebase(historiqueResult.rows[0]);
+                }
 
                 // Si terminé (id_status = 3), mettre la date de fin réelle
                 if (id_status === 3) {
@@ -909,6 +1099,15 @@ router.put('/:id/status',
                         'UPDATE Reparation SET date_fin_reelle = CURRENT_DATE WHERE id_reparation = $1',
                         [reparationId]
                     );
+                }
+
+                // Synchroniser la réparation mise à jour avec Firebase
+                const updatedReparation = await pool.query(
+                    'SELECT * FROM Reparation WHERE id_reparation = $1',
+                    [reparationId]
+                );
+                if (updatedReparation.rows.length > 0) {
+                    await syncReparationToFirebase(updatedReparation.rows[0], signalementId);
                 }
             }
 
@@ -1011,27 +1210,42 @@ router.put('/manager/:id/assigner-entreprise',
             );
 
             if (reparationResult.rows.length > 0) {
-                // Mettre à jour l'entreprise de la réparation existante
+                // Mettre à jour l'entreprise de la réparation existante et marquer non synchronisé
                 await pool.query(
                     `UPDATE Reparation 
-                     SET id_entreprise = $1, date_modification = CURRENT_TIMESTAMP 
+                     SET id_entreprise = $1, date_modification = CURRENT_TIMESTAMP, est_synchronise = FALSE 
                      WHERE id_signalement = $2`,
                     [id_entreprise, signalementId]
                 );
+
+                // Marquer le signalement comme non synchronisé
+                await pool.query(
+                    'UPDATE Signalement SET est_synchronise = FALSE WHERE id_signalement = $1',
+                    [signalementId]
+                );
             } else {
-                // Créer une nouvelle réparation avec l'entreprise
+                // Créer une nouvelle réparation avec l'entreprise (non synchronisée)
                 await pool.query(
                     `INSERT INTO Reparation 
-                     (surface_m2, budget, id_entreprise, id_signalement, id_status, id_user)
-                     VALUES (0, 0, $1, $2, 2, $3)`,
+                     (surface_m2, budget, id_entreprise, id_signalement, id_status, id_user, est_synchronise)
+                     VALUES (0, 0, $1, $2, 2, $3, FALSE)`,
                     [id_entreprise, signalementId, managerId]
                 );
 
-                // Mettre à jour le statut du signalement à "En cours"
+                // Mettre à jour le statut du signalement à "En cours" et marquer non synchronisé
                 await pool.query(
-                    'UPDATE Signalement SET id_status = 2 WHERE id_signalement = $1',
+                    'UPDATE Signalement SET id_status = 2, est_synchronise = FALSE WHERE id_signalement = $1',
                     [signalementId]
                 );
+            }
+
+            // Synchroniser la réparation avec Firebase
+            const updatedReparation = await pool.query(
+                'SELECT * FROM Reparation WHERE id_signalement = $1',
+                [signalementId]
+            );
+            if (updatedReparation.rows.length > 0) {
+                await syncReparationToFirebase(updatedReparation.rows[0], signalementId);
             }
 
             res.status(200).json({
@@ -1119,30 +1333,39 @@ router.put('/manager/:id/budget',
 
             let result;
             if (reparationResult.rows.length > 0) {
-                // Mettre à jour le budget
+                // Mettre à jour le budget et marquer non synchronisé
                 result = await pool.query(
                     `UPDATE Reparation 
-                     SET budget = $1, date_modification = CURRENT_TIMESTAMP 
+                     SET budget = $1, date_modification = CURRENT_TIMESTAMP, est_synchronise = FALSE 
                      WHERE id_signalement = $2
                      RETURNING *`,
                     [budget, signalementId]
                 );
+
+                // Marquer le signalement comme non synchronisé
+                await pool.query(
+                    'UPDATE Signalement SET est_synchronise = FALSE WHERE id_signalement = $1',
+                    [signalementId]
+                );
             } else {
-                // Créer une nouvelle réparation avec le budget
+                // Créer une nouvelle réparation avec le budget (non synchronisée)
                 result = await pool.query(
                     `INSERT INTO Reparation 
-                     (surface_m2, budget, id_entreprise, id_signalement, id_status, id_user)
-                     VALUES (0, $1, 1, $2, 2, $3)
+                     (surface_m2, budget, id_entreprise, id_signalement, id_status, id_user, est_synchronise)
+                     VALUES (0, $1, 1, $2, 2, $3, FALSE)
                      RETURNING *`,
                     [budget, signalementId, managerId]
                 );
 
-                // Mettre à jour le statut du signalement à "En cours"
+                // Mettre à jour le statut du signalement à "En cours" et marquer non synchronisé
                 await pool.query(
-                    'UPDATE Signalement SET id_status = 2 WHERE id_signalement = $1',
+                    'UPDATE Signalement SET id_status = 2, est_synchronise = FALSE WHERE id_signalement = $1',
                     [signalementId]
                 );
             }
+
+            // Synchroniser avec Firebase
+            await syncReparationToFirebase(result.rows[0], signalementId);
 
             res.status(200).json({
                 success: true,
@@ -1230,30 +1453,39 @@ router.put('/manager/:id/surface',
 
             let result;
             if (reparationResult.rows.length > 0) {
-                // Mettre à jour la surface
+                // Mettre à jour la surface et marquer non synchronisé
                 result = await pool.query(
                     `UPDATE Reparation 
-                     SET surface_m2 = $1, date_modification = CURRENT_TIMESTAMP 
+                     SET surface_m2 = $1, date_modification = CURRENT_TIMESTAMP, est_synchronise = FALSE 
                      WHERE id_signalement = $2
                      RETURNING *`,
                     [surface_m2, signalementId]
                 );
+
+                // Marquer le signalement comme non synchronisé
+                await pool.query(
+                    'UPDATE Signalement SET est_synchronise = FALSE WHERE id_signalement = $1',
+                    [signalementId]
+                );
             } else {
-                // Créer une nouvelle réparation avec la surface
+                // Créer une nouvelle réparation avec la surface (non synchronisée)
                 result = await pool.query(
                     `INSERT INTO Reparation 
-                     (surface_m2, budget, id_entreprise, id_signalement, id_status, id_user)
-                     VALUES ($1, 0, 1, $2, 2, $3)
+                     (surface_m2, budget, id_entreprise, id_signalement, id_status, id_user, est_synchronise)
+                     VALUES ($1, 0, 1, $2, 2, $3, FALSE)
                      RETURNING *`,
                     [surface_m2, signalementId, managerId]
                 );
 
-                // Mettre à jour le statut du signalement à "En cours"
+                // Mettre à jour le statut du signalement à "En cours" et marquer non synchronisé
                 await pool.query(
-                    'UPDATE Signalement SET id_status = 2 WHERE id_signalement = $1',
+                    'UPDATE Signalement SET id_status = 2, est_synchronise = FALSE WHERE id_signalement = $1',
                     [signalementId]
                 );
             }
+
+            // Tenter de synchroniser avec Firebase
+            await syncReparationToFirebase(result.rows[0], signalementId);
 
             res.status(200).json({
                 success: true,
@@ -1369,7 +1601,7 @@ router.put('/manager/:id/gestion-complete',
 
             let result;
             if (reparationResult.rows.length > 0) {
-                // Mettre à jour la réparation existante
+                // Mettre à jour la réparation existante et marquer non synchronisé
                 result = await pool.query(
                     `UPDATE Reparation 
                      SET id_entreprise = COALESCE($1, id_entreprise),
@@ -1378,27 +1610,37 @@ router.put('/manager/:id/gestion-complete',
                          date_debut = COALESCE($4, date_debut),
                          date_fin_prevue = COALESCE($5, date_fin_prevue),
                          commentaire = COALESCE($6, commentaire),
-                         date_modification = CURRENT_TIMESTAMP
+                         date_modification = CURRENT_TIMESTAMP,
+                         est_synchronise = FALSE
                      WHERE id_signalement = $7
                      RETURNING *`,
                     [id_entreprise, budget, surface_m2, date_debut, date_fin_prevue, commentaire, signalementId]
                 );
+
+                // Marquer le signalement comme non synchronisé
+                await pool.query(
+                    'UPDATE Signalement SET est_synchronise = FALSE WHERE id_signalement = $1',
+                    [signalementId]
+                );
             } else {
-                // Créer une nouvelle réparation
+                // Créer une nouvelle réparation (non synchronisée)
                 result = await pool.query(
                     `INSERT INTO Reparation 
-                     (surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, id_signalement, id_status, id_user)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, 2, $8)
+                     (surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, id_signalement, id_status, id_user, est_synchronise)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, 2, $8, FALSE)
                      RETURNING *`,
                     [surface_m2 || 0, budget || 0, id_entreprise || 1, date_debut, date_fin_prevue, commentaire, signalementId, managerId]
                 );
 
-                // Mettre à jour le statut du signalement à "En cours"
+                // Mettre à jour le statut du signalement à "En cours" et marquer non synchronisé
                 await pool.query(
-                    'UPDATE Signalement SET id_status = 2 WHERE id_signalement = $1',
+                    'UPDATE Signalement SET id_status = 2, est_synchronise = FALSE WHERE id_signalement = $1',
                     [signalementId]
                 );
             }
+
+            // Synchroniser avec Firebase
+            await syncReparationToFirebase(result.rows[0], signalementId);
 
             // Récupérer les détails de l'entreprise assignée
             const entrepriseDetails = await pool.query(
@@ -1908,8 +2150,7 @@ router.get('/:id/historique', authMiddleware, async (req: Request, res: Response
         sa.couleur as ancien_couleur,
         sn.libelle as nouveau_status,
         sn.couleur as nouveau_couleur,
-        u.nom as modifie_par_nom,
-        u.prenom as modifie_par_prenom
+        u.display_name as modifie_par
       FROM HistoriqueStatus h
       JOIN Reparation r ON h.id_reparation = r.id_reparation
       LEFT JOIN Status sa ON h.id_status_ancien = sa.id_status

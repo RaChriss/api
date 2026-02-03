@@ -217,7 +217,9 @@ router.post('/sync/signalements', auth_1.authMiddleware, auth_1.managerMiddlewar
     try {
         // Récupérer les signalements non synchronisés
         const query = `
-      SELECT s.*, u.email, u.nom, u.prenom, st.libelle as status_libelle
+      SELECT s.id_signalement, s.description, s.date_signalement, s.firebase_id, s.id_user, s.id_status,
+             ST_X(s.location) as longitude, ST_Y(s.location) as latitude,
+             u.email, u.display_name, st.libelle as status_libelle
       FROM Signalement s
       JOIN user_ u ON s.id_user = u.id_user
       JOIN Status st ON s.id_status = st.id_status

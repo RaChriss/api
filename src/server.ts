@@ -8,6 +8,7 @@ import { checkConnection } from './config/database';
 import { setupSwagger } from './config/swagger';
 import { connectionMiddleware } from './middleware/connection';
 import { hybridDataService } from './services/hybridDataService';
+import { syncService } from './services/syncService';
 import firebaseRoutes from './routes/firebase';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
@@ -55,7 +56,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.get('/health', async (req: Request, res: Response) => {
   const isFirebaseConnected = hybridDataService.isFirebaseAvailableSync();
   const syncStatus = await hybridDataService.getSyncStatus();
-  
+
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
@@ -77,7 +78,7 @@ app.get('/health', async (req: Request, res: Response) => {
 app.get('/api', async (req: Request, res: Response) => {
   const isFirebaseConnected = hybridDataService.isFirebaseAvailableSync();
   const syncStatus = await hybridDataService.getSyncStatus();
-  
+
   res.status(200).json({
     service: 'Travaux Routiers API',
     version: '1.0.0',
@@ -176,10 +177,10 @@ interface CustomError extends Error {
 
 app.use((err: CustomError, req: Request, res: Response, next: NextFunction) => {
   console.error('Error:', err);
-  
+
   const status = err.status || 500;
   const message = err.message || 'Internal Server Error';
-  
+
   res.status(status).json({
     error: {
       status,
@@ -210,7 +211,7 @@ app.use((req: Request, res: Response) => {
 async function startServer() {
   // Vérifier la connexion PostgreSQL
   const dbConnected = await checkConnection();
-  
+
   app.listen(port, () => {
     console.log(`
 ╔════════════════════════════════════════════════════╗

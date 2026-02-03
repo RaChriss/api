@@ -417,16 +417,37 @@ router.post('/login',
       const userAgent = req.headers['user-agent'];
       const isOnline = await hybridDataService.isFirebaseAvailable();
 
-      // ===== Vérifier si l'email est bloqué (trop de tentatives) =====
+      // ===== Vérifier si l'utilisateur est bloqué de manière permanente =====
+      const existingUser = await UserService.findByEmail(email);
+      if (existingUser?.est_bloque) {
+        res.status(403).json({
+          success: false,
+          error: 'Votre compte est bloqué. Contactez un administrateur.',
+          blocked: true,
+          reason: 'permanent'
+        });
+        return;
+      }
+
+      // ===== Vérifier si l'email est bloqué temporairement (trop de tentatives) =====
       const blockInfo = await LoginAttemptService.checkBlocking(email);
-      if (blockInfo.isBlocked) {
+
+      // Les managers ne sont jamais bloqués par les tentatives
+      if (blockInfo.isBlocked && !blockInfo.isManager) {
+        // Bloquer automatiquement le compte de l'utilisateur
+        const autoBlockResult = await LoginAttemptService.autoBlockUserIfNeeded(email);
+
         res.status(429).json({
           success: false,
-          error: 'Compte temporairement bloqué suite à trop de tentatives',
+          error: autoBlockResult.blocked
+            ? 'Compte bloqué suite à trop de tentatives de connexion. Contactez un administrateur.'
+            : 'Compte temporairement bloqué suite à trop de tentatives',
+          blocked: autoBlockResult.blocked,
           details: {
             tentatives: blockInfo.attempts,
             max_tentatives: blockInfo.maxAttempts,
-            tentatives_restantes: blockInfo.remainingAttempts
+            compte_bloque: autoBlockResult.blocked,
+            raison: autoBlockResult.reason
           }
         });
         return;

@@ -22,7 +22,7 @@ router.post('/verify-token', async (req: Request, res: Response): Promise<void> 
 
     // Vérifie le token Firebase
     const decodedToken = await admin.auth().verifyIdToken(idToken);
-    
+
     res.status(200).json({
       success: true,
       user: {
@@ -101,7 +101,7 @@ router.post('/sync-signalement', async (req: Request, res: Response): Promise<vo
 
     // Ajoute le signalement à Firestore
     const signalementRef = admin.firestore().collection('signalements').doc(id_signalement.toString());
-    
+
     await signalementRef.set({
       id_signalement,
       id_user,
@@ -134,7 +134,7 @@ router.post('/sync-signalement', async (req: Request, res: Response): Promise<vo
 router.get('/signalements', async (req: Request, res: Response) => {
   try {
     const snapshot = await admin.firestore().collection('signalements').get();
-    
+
     const signalements = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
@@ -195,19 +195,21 @@ router.post('/sync/signalements', authMiddleware, managerMiddleware, async (req:
   try {
     // Récupérer les signalements non synchronisés
     const query = `
-      SELECT s.*, u.email, u.nom, u.prenom, st.libelle as status_libelle
+      SELECT s.id_signalement, s.description, s.date_signalement, s.firebase_id, s.id_user, s.id_status,
+             ST_X(s.location) as longitude, ST_Y(s.location) as latitude,
+             u.email, u.display_name, st.libelle as status_libelle
       FROM Signalement s
       JOIN user_ u ON s.id_user = u.id_user
       JOIN Status st ON s.id_status = st.id_status
       WHERE s.est_synchronise = FALSE
     `;
-    
+
     const result = await pool.query(query);
     const signalements = result.rows;
-    
+
     let syncedCount = 0;
     const batch = admin.firestore().batch();
-    
+
     for (const signalement of signalements) {
       try {
         // Créer ou mettre à jour dans Firebase
@@ -231,26 +233,26 @@ router.post('/sync/signalements', authMiddleware, managerMiddleware, async (req:
           },
           synchronized_at: admin.firestore.FieldValue.serverTimestamp()
         };
-        
+
         batch.set(docRef, firebaseData);
-        
+
         // Mettre à jour PostgreSQL avec l'ID Firebase
         await pool.query(
           'UPDATE Signalement SET firebase_id = $1, est_synchronise = TRUE WHERE id_signalement = $2',
           [docRef.id, signalement.id_signalement]
         );
-        
+
         syncedCount++;
       } catch (itemError: any) {
         console.error(`Erreur sync signalement ${signalement.id_signalement}:`, itemError);
       }
     }
-    
+
     // Valider le batch Firebase
     if (syncedCount > 0) {
       await batch.commit();
     }
-    
+
     res.status(200).json({
       success: true,
       synced: syncedCount,
@@ -279,12 +281,12 @@ router.post('/sync/users', authMiddleware, managerMiddleware, async (req: Reques
       JOIN typeuser t ON u.id_type_user = t.id_type_user
       WHERE u.firebase_uid IS NULL
     `;
-    
+
     const result = await pool.query(query);
     const users = result.rows;
-    
+
     let syncedCount = 0;
-    
+
     for (const user of users) {
       try {
         // Créer l'utilisateur dans Firebase Auth
@@ -293,7 +295,7 @@ router.post('/sync/users', authMiddleware, managerMiddleware, async (req: Reques
           displayName: `${user.prenom} ${user.nom}`,
           disabled: user.est_bloque
         });
-        
+
         // Créer le document utilisateur dans Firestore
         await admin.firestore().collection('users').doc(firebaseUser.uid).set({
           nom: user.nom,
@@ -307,19 +309,19 @@ router.post('/sync/users', authMiddleware, managerMiddleware, async (req: Reques
           est_bloque: user.est_bloque,
           synchronized_at: admin.firestore.FieldValue.serverTimestamp()
         });
-        
+
         // Mettre à jour PostgreSQL avec l'UID Firebase
         await pool.query(
           'UPDATE user_ SET firebase_uid = $1 WHERE id_user = $2',
           [firebaseUser.uid, user.id_user]
         );
-        
+
         syncedCount++;
       } catch (itemError: any) {
         console.error(`Erreur sync utilisateur ${user.id_user}:`, itemError);
       }
     }
-    
+
     res.status(200).json({
       success: true,
       synced: syncedCount,
@@ -344,7 +346,7 @@ router.get('/status', async (req: Request, res: Response): Promise<void> => {
     await admin.firestore().collection('_health').add({
       timestamp: admin.firestore.FieldValue.serverTimestamp()
     });
-    
+
     res.status(200).json({
       connected: true,
       timestamp: new Date().toISOString()
@@ -370,18 +372,18 @@ router.get('/sync-status', authMiddleware, managerMiddleware, async (req: Reques
     const signalementResult = await pool.query(
       'SELECT COUNT(*) as count FROM Signalement WHERE est_synchronise = FALSE'
     );
-    
+
     // Compter les utilisateurs sans firebase_uid
     const userResult = await pool.query(
       'SELECT COUNT(*) as count FROM user_ WHERE firebase_uid IS NULL'
     );
-    
+
     // Dernière synchronisation
     const lastSyncResult = await pool.query(`
       SELECT MAX(CASE WHEN firebase_id IS NOT NULL THEN date_signalement END) as last_signalement_sync
       FROM Signalement
     `);
-    
+
     res.status(200).json({
       pending_signalements: parseInt(signalementResult.rows[0].count),
       pending_users: parseInt(userResult.rows[0].count),

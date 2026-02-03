@@ -1,4 +1,4 @@
--- Active: 1768372624470@@localhost@5433@travaux_routiers@public
+-- Active: 1770029595910@@127.0.0.1@5432@travaux_routiers@public
 -- Migration: Ajout des colonnes de synchronisation Firebase
 -- Date: $(date)
 -- Description: Ajoute les colonnes nécessaires pour la synchronisation Firebase/PostgreSQL
@@ -25,6 +25,24 @@ BEGIN
     ELSE
         RAISE NOTICE 'Colonne est_synchronise existe déjà dans la table Signalement';
     END IF;
+
+    -- Vérifier et ajouter updated_at pour la détection de conflits
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'signalement' AND column_name = 'updated_at') THEN
+        ALTER TABLE Signalement ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        RAISE NOTICE 'Colonne updated_at ajoutée à la table Signalement';
+    ELSE
+        RAISE NOTICE 'Colonne updated_at existe déjà dans la table Signalement';
+    END IF;
+
+    -- Vérifier et ajouter sync_version pour le versioning
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'signalement' AND column_name = 'sync_version') THEN
+        ALTER TABLE Signalement ADD COLUMN sync_version INTEGER DEFAULT 1;
+        RAISE NOTICE 'Colonne sync_version ajoutée à la table Signalement';
+    ELSE
+        RAISE NOTICE 'Colonne sync_version existe déjà dans la table Signalement';
+    END IF;
 END $$;
 
 -- Ajouter firebase_uid à la table User_ si elle n'existe pas
@@ -36,6 +54,96 @@ BEGIN
         RAISE NOTICE 'Colonne firebase_uid ajoutée à la table User_';
     ELSE
         RAISE NOTICE 'Colonne firebase_uid existe déjà dans la table User_';
+    END IF;
+END $$;
+
+-- ============================================
+-- Colonnes de synchronisation pour Reparation
+-- ============================================
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'reparation' AND column_name = 'firebase_id') THEN
+        ALTER TABLE Reparation ADD COLUMN firebase_id VARCHAR(128);
+        RAISE NOTICE 'Colonne firebase_id ajoutée à Reparation';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'reparation' AND column_name = 'est_synchronise') THEN
+        ALTER TABLE Reparation ADD COLUMN est_synchronise BOOLEAN DEFAULT FALSE;
+        RAISE NOTICE 'Colonne est_synchronise ajoutée à Reparation';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'reparation' AND column_name = 'updated_at') THEN
+        ALTER TABLE Reparation ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        RAISE NOTICE 'Colonne updated_at ajoutée à Reparation';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'reparation' AND column_name = 'sync_version') THEN
+        ALTER TABLE Reparation ADD COLUMN sync_version INTEGER DEFAULT 1;
+        RAISE NOTICE 'Colonne sync_version ajoutée à Reparation';
+    END IF;
+END $$;
+
+-- ============================================
+-- Colonnes de synchronisation pour Entreprise
+-- ============================================
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'entreprise' AND column_name = 'firebase_id') THEN
+        ALTER TABLE Entreprise ADD COLUMN firebase_id VARCHAR(128);
+        RAISE NOTICE 'Colonne firebase_id ajoutée à Entreprise';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'entreprise' AND column_name = 'est_synchronise') THEN
+        ALTER TABLE Entreprise ADD COLUMN est_synchronise BOOLEAN DEFAULT FALSE;
+        RAISE NOTICE 'Colonne est_synchronise ajoutée à Entreprise';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'entreprise' AND column_name = 'updated_at') THEN
+        ALTER TABLE Entreprise ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        RAISE NOTICE 'Colonne updated_at ajoutée à Entreprise';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'entreprise' AND column_name = 'sync_version') THEN
+        ALTER TABLE Entreprise ADD COLUMN sync_version INTEGER DEFAULT 1;
+        RAISE NOTICE 'Colonne sync_version ajoutée à Entreprise';
+    END IF;
+END $$;
+
+-- ============================================
+-- Colonnes de synchronisation pour Status
+-- ============================================
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'status' AND column_name = 'firebase_id') THEN
+        ALTER TABLE Status ADD COLUMN firebase_id VARCHAR(128);
+        RAISE NOTICE 'Colonne firebase_id ajoutée à Status';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'status' AND column_name = 'est_synchronise') THEN
+        ALTER TABLE Status ADD COLUMN est_synchronise BOOLEAN DEFAULT FALSE;
+        RAISE NOTICE 'Colonne est_synchronise ajoutée à Status';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'status' AND column_name = 'updated_at') THEN
+        ALTER TABLE Status ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        RAISE NOTICE 'Colonne updated_at ajoutée à Status';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'status' AND column_name = 'sync_version') THEN
+        ALTER TABLE Status ADD COLUMN sync_version INTEGER DEFAULT 1;
+        RAISE NOTICE 'Colonne sync_version ajoutée à Status';
     END IF;
 END $$;
 
@@ -59,201 +167,269 @@ BEGIN
         CREATE INDEX idx_user_firebase_uid ON User_(firebase_uid);
         RAISE NOTICE 'Index idx_user_firebase_uid créé';
     END IF;
+
+    -- Index pour updated_at (important pour la détection de conflits)
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_signalement_updated_at') THEN
+        CREATE INDEX idx_signalement_updated_at ON Signalement(updated_at);
+        RAISE NOTICE 'Index idx_signalement_updated_at créé';
+    END IF;
+
+    -- Index pour Reparation
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_reparation_firebase_id') THEN
+        CREATE INDEX idx_reparation_firebase_id ON Reparation(firebase_id);
+        RAISE NOTICE 'Index idx_reparation_firebase_id créé';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_reparation_est_synchronise') THEN
+        CREATE INDEX idx_reparation_est_synchronise ON Reparation(est_synchronise);
+        RAISE NOTICE 'Index idx_reparation_est_synchronise créé';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_reparation_updated_at') THEN
+        CREATE INDEX idx_reparation_updated_at ON Reparation(updated_at);
+        RAISE NOTICE 'Index idx_reparation_updated_at créé';
+    END IF;
+
+    -- Index pour Entreprise
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_entreprise_firebase_id') THEN
+        CREATE INDEX idx_entreprise_firebase_id ON Entreprise(firebase_id);
+        RAISE NOTICE 'Index idx_entreprise_firebase_id créé';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_entreprise_est_synchronise') THEN
+        CREATE INDEX idx_entreprise_est_synchronise ON Entreprise(est_synchronise);
+        RAISE NOTICE 'Index idx_entreprise_est_synchronise créé';
+    END IF;
+
+    -- Index pour Status
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_status_firebase_id') THEN
+        CREATE INDEX idx_status_firebase_id ON Status(firebase_id);
+        RAISE NOTICE 'Index idx_status_firebase_id créé';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_status_est_synchronise') THEN
+        CREATE INDEX idx_status_est_synchronise ON Status(est_synchronise);
+        RAISE NOTICE 'Index idx_status_est_synchronise créé';
+    END IF;
 END $$;
 
 -- Table de log de synchronisation pour tracer les opérations
 CREATE TABLE IF NOT EXISTS SyncLog (
     Id_SyncLog SERIAL PRIMARY KEY,
-    table_name VARCHAR(50) NOT NULL,        -- 'Signalement' ou 'User_'
-    record_id INTEGER NOT NULL,             -- ID de l'enregistrement synchronisé
-    firebase_id VARCHAR(128),               -- ID Firebase correspondant
-    operation VARCHAR(20) NOT NULL,         -- 'CREATE', 'UPDATE', 'DELETE'
-    status VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',  -- 'SUCCESS', 'FAILED', 'PARTIAL'
-    error_message TEXT,                     -- Message d'erreur si échec
+    table_name VARCHAR(50) NOT NULL, -- 'Signalement', 'Reparation', 'Entreprise', 'Status', etc.
+    record_id INTEGER, -- ID de l'enregistrement synchronisé (nullable pour les conflits)
+    firebase_id VARCHAR(128), -- ID Firebase correspondant
+    operation VARCHAR(20) NOT NULL, -- 'CREATE', 'UPDATE', 'DELETE', 'CONFLICT'
+    status VARCHAR(20) NOT NULL DEFAULT 'SUCCESS', -- 'SUCCESS', 'FAILED', 'PARTIAL', 'CONFLICT'
+    error_message TEXT, -- Message d'erreur si échec ou description du conflit
     sync_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    sync_duration_ms INTEGER,               -- Durée en millisecondes
-    data_size INTEGER,                      -- Taille des données en bytes
-    user_agent VARCHAR(255)                 -- User agent pour traçabilité
+    sync_duration_ms INTEGER, -- Durée en millisecondes
+    data_size INTEGER, -- Taille des données en bytes
+    user_agent VARCHAR(255) -- User agent pour traçabilité
 );
 
 -- Index pour la table SyncLog
-CREATE INDEX IF NOT EXISTS idx_synclog_date ON SyncLog(sync_date);
-CREATE INDEX IF NOT EXISTS idx_synclog_table_record ON SyncLog(table_name, record_id);
-CREATE INDEX IF NOT EXISTS idx_synclog_status ON SyncLog(status);
+CREATE INDEX IF NOT EXISTS idx_synclog_date ON SyncLog (sync_date);
+
+CREATE INDEX IF NOT EXISTS idx_synclog_table_record ON SyncLog (table_name, record_id);
+
+CREATE INDEX IF NOT EXISTS idx_synclog_status ON SyncLog (status);
 
 -- Vue pour les signalements non synchronisés avec détails
 CREATE OR REPLACE VIEW v_signalements_non_synchronises AS
-SELECT 
+SELECT
     s.id_signalement,
     s.date_signalement,
-    s.longitude,
-    s.latitude,
+    s.updated_at,
+    s.sync_version,
+    ST_X (s.location) as longitude,
+    ST_Y (s.location) as latitude,
     s.firebase_id,
     s.est_synchronise,
     u.id_user,
-    u.nom,
-    u.prenom,
+    u.display_name,
     u.email,
     u.firebase_uid,
     st.id_status,
     st.libelle as status_libelle,
     st.couleur as status_couleur
-FROM Signalement s
-JOIN User_ u ON s.id_user = u.id_user
-JOIN Status st ON s.id_status = st.id_status
-WHERE s.est_synchronise = FALSE
+FROM
+    Signalement s
+    JOIN User_ u ON s.id_user = u.id_user
+    JOIN Status st ON s.id_status = st.id_status
+WHERE
+    s.est_synchronise = FALSE
 ORDER BY s.date_signalement DESC;
 
 -- Vue pour les utilisateurs non synchronisés
 CREATE OR REPLACE VIEW v_users_non_synchronises AS
-SELECT 
-    u.id_user,
-    u.nom,
-    u.prenom,
-    u.email,
-    u.firebase_uid,
-    u.date_creation,
-    u.est_bloque,
-    t.id_type_user,
-    t.libelle as type_libelle
+SELECT u.id_user, u.display_name, u.email, u.firebase_uid, u.date_creation, u.est_bloque, t.id_type_user, t.libelle as type_libelle
 FROM User_ u
-JOIN TypeUser t ON u.id_type_user = t.id_type_user
-WHERE u.firebase_uid IS NULL
+    JOIN TypeUser t ON u.id_type_user = t.id_type_user
+WHERE
+    u.firebase_uid IS NULL
 ORDER BY u.date_creation DESC;
 
 -- Vue récapitulatif synchronisation
 CREATE OR REPLACE VIEW v_sync_status AS
-SELECT 
+SELECT
     'Signalements' as type_donnee,
     COUNT(*) as total,
-    COUNT(CASE WHEN est_synchronise = TRUE THEN 1 END) as synchronises,
-    COUNT(CASE WHEN est_synchronise = FALSE THEN 1 END) as en_attente,
+    COUNT(
+        CASE
+            WHEN est_synchronise = TRUE THEN 1
+        END
+    ) as synchronises,
+    COUNT(
+        CASE
+            WHEN est_synchronise = FALSE THEN 1
+        END
+    ) as en_attente,
     ROUND(
-        (COUNT(CASE WHEN est_synchronise = TRUE THEN 1 END)::DECIMAL / NULLIF(COUNT(*), 0)) * 100, 
+        (
+            COUNT(
+                CASE
+                    WHEN est_synchronise = TRUE THEN 1
+                END
+            )::DECIMAL / NULLIF(COUNT(*), 0)
+        ) * 100,
         2
     ) as pourcentage_sync
 FROM Signalement
 UNION ALL
-SELECT 
+SELECT
     'Utilisateurs' as type_donnee,
     COUNT(*) as total,
-    COUNT(CASE WHEN firebase_uid IS NOT NULL THEN 1 END) as synchronises,
-    COUNT(CASE WHEN firebase_uid IS NULL THEN 1 END) as en_attente,
+    COUNT(
+        CASE
+            WHEN firebase_uid IS NOT NULL THEN 1
+        END
+    ) as synchronises,
+    COUNT(
+        CASE
+            WHEN firebase_uid IS NULL THEN 1
+        END
+    ) as en_attente,
     ROUND(
-        (COUNT(CASE WHEN firebase_uid IS NOT NULL THEN 1 END)::DECIMAL / NULLIF(COUNT(*), 0)) * 100, 
+        (
+            COUNT(
+                CASE
+                    WHEN firebase_uid IS NOT NULL THEN 1
+                END
+            )::DECIMAL / NULLIF(COUNT(*), 0)
+        ) * 100,
         2
     ) as pourcentage_sync
 FROM User_;
 
 -- Vue pour le dashboard manager avec statistiques des travaux
 CREATE OR REPLACE VIEW v_dashboard_manager AS
-SELECT 
+SELECT
     'signalements_total' as metric,
     COUNT(*)::TEXT as value,
     'Signalements total' as label,
     'signalements' as category
 FROM Signalement
 UNION ALL
-SELECT 
+SELECT
     'signalements_non_traites' as metric,
     COUNT(*)::TEXT as value,
     'Signalements non traités' as label,
     'signalements' as category
-FROM Signalement s 
-LEFT JOIN Reparation r ON s.id_signalement = r.id_signalement
-WHERE r.id_reparation IS NULL
+FROM Signalement s
+    LEFT JOIN Reparation r ON s.id_signalement = r.id_signalement
+WHERE
+    r.id_reparation IS NULL
 UNION ALL
-SELECT 
+SELECT
     'reparations_en_cours' as metric,
     COUNT(*)::TEXT as value,
     'Réparations en cours' as label,
     'reparations' as category
 FROM Reparation r
-JOIN Status st ON r.id_status = st.id_status
-WHERE st.libelle IN ('En cours', 'En préparation')
+    JOIN Status st ON r.id_status = st.id_status
+WHERE
+    st.libelle IN ('En cours', 'En préparation')
 UNION ALL
-SELECT 
+SELECT
     'reparations_terminees' as metric,
     COUNT(*)::TEXT as value,
     'Réparations terminées' as label,
     'reparations' as category
 FROM Reparation r
-JOIN Status st ON r.id_status = st.id_status
-WHERE st.libelle = 'Terminé'
+    JOIN Status st ON r.id_status = st.id_status
+WHERE
+    st.libelle = 'Terminé'
 UNION ALL
-SELECT 
+SELECT
     'budget_total' as metric,
     COALESCE(SUM(budget), 0)::TEXT as value,
     'Budget total (Ar)' as label,
     'budget' as category
 FROM Reparation
 UNION ALL
-SELECT 
+SELECT
     'surface_totale' as metric,
     COALESCE(SUM(surface_m2), 0)::TEXT as value,
     'Surface totale (m²)' as label,
     'surface' as category
 FROM Reparation
 UNION ALL
-SELECT 
+SELECT
     'entreprises_actives' as metric,
     COUNT(DISTINCT r.id_entreprise)::TEXT as value,
     'Entreprises actives' as label,
     'entreprises' as category
 FROM Reparation r
-WHERE r.date_fin_reelle IS NULL;
+WHERE
+    r.date_fin_reelle IS NULL;
 
 -- Vue détaillée des signalements avec informations complètes
 CREATE OR REPLACE VIEW v_signalements_details AS
-SELECT 
+SELECT
     s.id_signalement,
     s.description,
     s.date_signalement,
-    s.longitude,
-    s.latitude,
-    s.photo_url,
+    ST_X (s.location) as longitude,
+    ST_Y (s.location) as latitude,
     s.firebase_id,
     s.est_synchronise,
-    
-    -- Informations utilisateur
-    u.id_user,
-    u.nom as user_nom,
-    u.prenom as user_prenom,
-    u.email as user_email,
-    tu.libelle as user_type,
-    
-    -- Informations statut
-    st.id_status,
-    st.libelle as status,
-    st.couleur as status_couleur,
-    
-    -- Informations réparation (si existe)
-    r.id_reparation,
-    r.surface_m2,
-    r.budget,
-    r.date_debut,
-    r.date_fin_prevue,
-    r.date_fin_reelle,
-    r.commentaire as reparation_commentaire,
-    
-    -- Informations entreprise (si réparation existe)
-    e.id_entreprise,
-    e.nom as entreprise_nom,
-    e.telephone as entreprise_tel,
-    e.email as entreprise_email,
-    
-    -- Manager assigné (si réparation existe)
-    um.nom as manager_nom,
-    um.prenom as manager_prenom,
-    um.email as manager_email
-    
-FROM Signalement s
-JOIN User_ u ON s.id_user = u.id_user
-JOIN TypeUser tu ON u.id_type_user = tu.id_type_user
-JOIN Status st ON s.id_status = st.id_status
-LEFT JOIN Reparation r ON s.id_signalement = r.id_signalement
-LEFT JOIN Entreprise e ON r.id_entreprise = e.id_entreprise
-LEFT JOIN User_ um ON r.id_user = um.id_user
+
+-- Informations utilisateur
+u.id_user,
+u.display_name as user_name,
+u.email as user_email,
+tu.libelle as user_type,
+
+-- Informations statut
+st.id_status, st.libelle as status, st.couleur as status_couleur,
+
+-- Informations réparation (si existe)
+r.id_reparation,
+r.surface_m2,
+r.budget,
+r.date_debut,
+r.date_fin_prevue,
+r.date_fin_reelle,
+r.commentaire as reparation_commentaire,
+
+-- Informations entreprise (si réparation existe)
+e.id_entreprise,
+e.nom as entreprise_nom,
+e.telephone as entreprise_tel,
+e.email as entreprise_email,
+
+-- Manager assigné (si réparation existe)
+um.display_name as manager_name,
+um.email as manager_email
+FROM
+    Signalement s
+    JOIN User_ u ON s.id_user = u.id_user
+    JOIN TypeUser tu ON u.id_type_user = tu.id_type_user
+    JOIN Status st ON s.id_status = st.id_status
+    LEFT JOIN Reparation r ON s.id_signalement = r.id_signalement
+    LEFT JOIN Entreprise e ON r.id_entreprise = e.id_entreprise
+    LEFT JOIN User_ um ON r.id_user = um.id_user
 ORDER BY s.date_signalement DESC;
 
 -- Fonction pour nettoyer les anciens logs de synchronisation (garder 30 jours)
@@ -302,4 +478,5 @@ COMMIT;
 
 -- Afficher le statut final
 SELECT 'Migration terminée avec succès!' as message;
+
 SELECT * FROM v_sync_status;

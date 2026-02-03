@@ -507,10 +507,11 @@ export class SignalementService {
                 signalement.firebase_id = docRef.id;
             }
 
-            // Marquer comme synchronisé
+            // Marquer comme synchronisé avec la date de dernière sync
             await query(
-                `UPDATE Signalement SET firebase_id = $1, est_synchronise = TRUE 
-         WHERE id_signalement = $2`,
+                `UPDATE Signalement 
+                 SET firebase_id = $1, est_synchronise = TRUE, derniere_sync = CURRENT_TIMESTAMP 
+                 WHERE id_signalement = $2`,
                 [signalement.firebase_id, signalement.id_signalement]
             );
 
@@ -519,6 +520,516 @@ export class SignalementService {
             console.warn('⚠️ Erreur sync Firebase:', (error as Error).message);
             throw error;
         }
+    }
+
+    /**
+     * Synchronisation bidirectionnelle complète (PostgreSQL <-> Firebase)
+     * - Envoie les données locales vers Firebase
+     * - Récupère les données de Firebase vers PostgreSQL
+     */
+    static async syncBidirectional(): Promise<{
+        toFirebase: { signalements: number; reparations: number; historiques: number; errors: number };
+        fromFirebase: { signalements: number; reparations: number; historiques: number; errors: number };
+    }> {
+        const isOnline = await hybridDataService.isFirebaseAvailable();
+
+        if (!isOnline) {
+            console.log('❌ Synchronisation impossible: Firebase non disponible');
+            return {
+                toFirebase: { signalements: 0, reparations: 0, historiques: 0, errors: 0 },
+                fromFirebase: { signalements: 0, reparations: 0, historiques: 0, errors: 0 }
+            };
+        }
+
+        console.log('🔄 Démarrage synchronisation bidirectionnelle...');
+
+        // 1. Sync PostgreSQL -> Firebase
+        const toFirebase = await this.syncToFirebaseAll();
+
+        // 2. Sync Firebase -> PostgreSQL
+        const fromFirebase = await this.syncFromFirebaseAll();
+
+        console.log('✅ Synchronisation bidirectionnelle terminée');
+
+        return { toFirebase, fromFirebase };
+    }
+
+    /**
+     * Synchronise toutes les données locales vers Firebase
+     */
+    private static async syncToFirebaseAll(): Promise<{ signalements: number; reparations: number; historiques: number; errors: number }> {
+        let signalementsSynced = 0;
+        let reparationsSynced = 0;
+        let historiquesSynced = 0;
+        let errors = 0;
+
+        try {
+            const db = getFirestore();
+
+            // 1. Synchroniser les signalements non synchronisés
+            const pendingSignalements = await this.getPendingSync();
+            console.log(`📤 ${pendingSignalements.length} signalements à envoyer vers Firebase`);
+
+            for (const signalement of pendingSignalements) {
+                try {
+                    await this.syncToFirebase(signalement);
+                    signalementsSynced++;
+                } catch (error) {
+                    console.error(`❌ Erreur sync signalement ${signalement.id_signalement}:`, error);
+                    errors++;
+                }
+            }
+
+            // 2. Synchroniser les réparations NON SYNCHRONISÉES
+            const reparationsResult = await query(`
+                SELECT r.*, s.firebase_id as signalement_firebase_id
+                FROM Reparation r
+                JOIN Signalement s ON r.id_signalement = s.id_signalement
+                WHERE r.est_synchronise = FALSE OR r.est_synchronise IS NULL
+            `);
+
+            console.log(`📤 ${reparationsResult.rows.length} réparations à synchroniser vers Firebase`);
+
+            for (const rep of reparationsResult.rows) {
+                try {
+                    const reparationData = {
+                        id_reparation: rep.id_reparation,
+                        id_signalement: rep.id_signalement,
+                        signalement_firebase_id: rep.signalement_firebase_id,
+                        surface_m2: rep.surface_m2 || 0,
+                        budget: rep.budget || 0,
+                        id_entreprise: rep.id_entreprise,
+                        id_status: rep.id_status,
+                        date_debut: rep.date_debut || null,
+                        date_fin_prevue: rep.date_fin_prevue || null,
+                        date_fin_reelle: rep.date_fin_reelle || null,
+                        commentaire: rep.commentaire || null,
+                        id_user: rep.id_user,
+                        updated_at: admin.firestore.FieldValue.serverTimestamp()
+                    };
+
+                    const docRef = db.collection('reparations').doc(rep.id_reparation.toString());
+                    const docSnapshot = await docRef.get();
+
+                    if (docSnapshot.exists) {
+                        await docRef.update(reparationData);
+                    } else {
+                        await docRef.set({
+                            ...reparationData,
+                            created_at: admin.firestore.FieldValue.serverTimestamp()
+                        });
+                    }
+
+                    // Marquer comme synchronisé dans PostgreSQL
+                    await query(
+                        `UPDATE Reparation 
+                         SET est_synchronise = TRUE, 
+                             firebase_id = $1,
+                             derniere_sync = CURRENT_TIMESTAMP 
+                         WHERE id_reparation = $2`,
+                        [rep.id_reparation.toString(), rep.id_reparation]
+                    );
+
+                    reparationsSynced++;
+                } catch (error) {
+                    console.error(`❌ Erreur sync réparation ${rep.id_reparation}:`, error);
+                    errors++;
+                }
+            }
+
+            // 3. Synchroniser l'historique des statuts
+            const historiquesResult = await query(`
+                SELECT h.*, r.id_signalement
+                FROM HistoriqueStatus h
+                JOIN Reparation r ON h.id_reparation = r.id_reparation
+                ORDER BY h.date_modification ASC
+            `);
+
+            console.log(`📤 ${historiquesResult.rows.length} historiques de status à synchroniser vers Firebase`);
+
+            for (const hist of historiquesResult.rows) {
+                try {
+                    const historiqueData = {
+                        id_historique: hist.id_historique,
+                        id_reparation: hist.id_reparation,
+                        id_signalement: hist.id_signalement,
+                        id_status_ancien: hist.id_status_ancien || null,
+                        id_status_nouveau: hist.id_status_nouveau,
+                        id_user: hist.id_user,
+                        date_modification: hist.date_modification || null,
+                        commentaire: hist.commentaire || null,
+                        updated_at: admin.firestore.FieldValue.serverTimestamp()
+                    };
+
+                    const docRef = db.collection('historique_status').doc(hist.id_historique.toString());
+                    const docSnapshot = await docRef.get();
+
+                    if (docSnapshot.exists) {
+                        await docRef.update(historiqueData);
+                    } else {
+                        await docRef.set({
+                            ...historiqueData,
+                            created_at: admin.firestore.FieldValue.serverTimestamp()
+                        });
+                    }
+
+                    historiquesSynced++;
+                } catch (error) {
+                    console.error(`❌ Erreur sync historique ${hist.id_historique}:`, error);
+                    errors++;
+                }
+            }
+
+            console.log(`✅ Vers Firebase: ${signalementsSynced} signalements, ${reparationsSynced} réparations, ${historiquesSynced} historiques`);
+        } catch (error) {
+            console.error('❌ Erreur sync vers Firebase:', error);
+            errors++;
+        }
+
+        return { signalements: signalementsSynced, reparations: reparationsSynced, historiques: historiquesSynced, errors };
+    }
+
+    /**
+     * Récupère les données de Firebase et les insère/met à jour dans PostgreSQL
+     * Utilise updated_at pour détecter les modifications côté Firebase
+     */
+    private static async syncFromFirebaseAll(): Promise<{ signalements: number; reparations: number; historiques: number; errors: number }> {
+        let signalementsSynced = 0;
+        let reparationsSynced = 0;
+        let historiquesSynced = 0;
+        let errors = 0;
+
+        try {
+            const db = getFirestore();
+
+            // ============================================
+            // 1. SYNCHRONISER LES SIGNALEMENTS
+            // ============================================
+            const signalementsSnapshot = await db.collection('signalements').get();
+            console.log(`📥 ${signalementsSnapshot.size} signalements trouvés dans Firebase`);
+
+            for (const doc of signalementsSnapshot.docs) {
+                try {
+                    const data = doc.data();
+                    const firebaseId = doc.id;
+
+                    // Récupérer la date de modification Firebase (fallback sur date_signalement si updated_at n'existe pas)
+                    let firebaseUpdatedAt = null;
+                    if (data.updated_at?.toDate) {
+                        firebaseUpdatedAt = data.updated_at.toDate();
+                    } else if (data.date_signalement?.toDate) {
+                        firebaseUpdatedAt = data.date_signalement.toDate();
+                    }
+
+                    // Vérifier si ce signalement existe déjà dans PostgreSQL
+                    const existingResult = await query(
+                        `SELECT id_signalement, derniere_sync, description, id_status 
+                         FROM Signalement 
+                         WHERE firebase_id = $1 OR id_signalement = $2`,
+                        [firebaseId, data.postgres_id || 0]
+                    );
+
+                    if (existingResult.rows.length === 0) {
+                        // ====== NOUVEAU SIGNALEMENT : Insérer ======
+                        let localUserId = data.id_user;
+
+                        if (data.firebase_uid) {
+                            const userResult = await query(
+                                'SELECT id_user FROM User_ WHERE firebase_uid = $1',
+                                [data.firebase_uid]
+                            );
+                            if (userResult.rows.length > 0) {
+                                localUserId = userResult.rows[0].id_user;
+                            }
+                        }
+
+                        // Extraire les coordonnées
+                        let latitude = null;
+                        let longitude = null;
+                        if (data.location) {
+                            if (data.location._latitude !== undefined) {
+                                latitude = data.location._latitude;
+                                longitude = data.location._longitude;
+                            } else if (data.location.latitude !== undefined) {
+                                latitude = data.location.latitude;
+                                longitude = data.location.longitude;
+                            }
+                        }
+
+                        const insertResult = await query(
+                            `INSERT INTO Signalement 
+                             (location, description, id_user, id_status, firebase_id, est_synchronise, date_signalement, derniere_sync)
+                             VALUES (
+                                 CASE WHEN $1 IS NOT NULL AND $2 IS NOT NULL 
+                                      THEN ST_SetSRID(ST_MakePoint($2, $1), 4326) 
+                                      ELSE NULL END,
+                                 $3, $4, $5, $6, TRUE, COALESCE($7, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP
+                             )
+                             RETURNING id_signalement`,
+                            [
+                                latitude,
+                                longitude,
+                                data.description || null,
+                                localUserId || 1,
+                                data.id_status || 1,
+                                firebaseId,
+                                data.date_signalement?.toDate ? data.date_signalement.toDate() : null
+                            ]
+                        );
+
+                        // Mettre à jour Firebase avec postgres_id, marqueur de sync et updated_at
+                        await db.collection('signalements').doc(firebaseId).update({
+                            postgres_id: insertResult.rows[0].id_signalement,
+                            synced_to_postgres: true,
+                            last_postgres_sync: admin.firestore.FieldValue.serverTimestamp(),
+                            updated_at: admin.firestore.FieldValue.serverTimestamp()
+                        });
+
+                        console.log(`✅ Signalement IMPORTÉ de Firebase: ${firebaseId} -> ${insertResult.rows[0].id_signalement}`);
+                        signalementsSynced++;
+
+                    } else {
+                        // ====== SIGNALEMENT EXISTANT : Vérifier si Firebase a des modifications plus récentes ======
+                        const existingRow = existingResult.rows[0];
+                        const postgresLastSync = existingRow.derniere_sync;
+
+                        // Comparer les dates : si Firebase a été modifié après la dernière sync PostgreSQL
+                        const needsUpdate = firebaseUpdatedAt &&
+                            (!postgresLastSync || firebaseUpdatedAt > new Date(postgresLastSync));
+
+                        if (needsUpdate) {
+                            // Extraire les nouvelles coordonnées
+                            let latitude = null;
+                            let longitude = null;
+                            if (data.location) {
+                                if (data.location._latitude !== undefined) {
+                                    latitude = data.location._latitude;
+                                    longitude = data.location._longitude;
+                                } else if (data.location.latitude !== undefined) {
+                                    latitude = data.location.latitude;
+                                    longitude = data.location.longitude;
+                                }
+                            }
+
+                            await query(
+                                `UPDATE Signalement 
+                                 SET description = COALESCE($1, description),
+                                     id_status = COALESCE($2, id_status),
+                                     location = CASE WHEN $3 IS NOT NULL AND $4 IS NOT NULL 
+                                                     THEN ST_SetSRID(ST_MakePoint($4, $3), 4326) 
+                                                     ELSE location END,
+                                     firebase_id = $5,
+                                     est_synchronise = TRUE,
+                                     derniere_sync = CURRENT_TIMESTAMP
+                                 WHERE id_signalement = $6`,
+                                [
+                                    data.description,
+                                    data.id_status,
+                                    latitude,
+                                    longitude,
+                                    firebaseId,
+                                    existingRow.id_signalement
+                                ]
+                            );
+
+                            // Mettre à jour Firebase avec marqueur de sync et updated_at
+                            await db.collection('signalements').doc(firebaseId).update({
+                                synced_to_postgres: true,
+                                last_postgres_sync: admin.firestore.FieldValue.serverTimestamp(),
+                                updated_at: admin.firestore.FieldValue.serverTimestamp()
+                            });
+
+                            console.log(`🔄 Signalement ${existingRow.id_signalement} MIS À JOUR depuis Firebase (modifié le ${firebaseUpdatedAt})`);
+                            signalementsSynced++;
+                        } else {
+                            // Juste mettre à jour firebase_id si nécessaire
+                            if (!existingRow.firebase_id || existingRow.firebase_id !== firebaseId) {
+                                await query(
+                                    `UPDATE Signalement SET firebase_id = $1 WHERE id_signalement = $2`,
+                                    [firebaseId, existingRow.id_signalement]
+                                );
+                            }
+
+                            // Si le document Firebase n'a pas de updated_at, l'ajouter
+                            if (!data.updated_at) {
+                                await db.collection('signalements').doc(firebaseId).update({
+                                    updated_at: admin.firestore.FieldValue.serverTimestamp()
+                                });
+                                console.log(`📝 Ajout de updated_at au signalement Firebase: ${firebaseId}`);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error(`❌ Erreur import signalement ${doc.id}:`, error);
+                    errors++;
+                }
+            }
+
+            // ============================================
+            // 2. SYNCHRONISER LES RÉPARATIONS
+            // ============================================
+            const reparationsSnapshot = await db.collection('reparations').get();
+            console.log(`📥 ${reparationsSnapshot.size} réparations trouvées dans Firebase`);
+
+            for (const doc of reparationsSnapshot.docs) {
+                try {
+                    const data = doc.data();
+                    const firebaseReparationId = data.id_reparation;
+                    const firebaseUpdatedAt = data.updated_at?.toDate ? data.updated_at.toDate() : null;
+
+                    // Vérifier si cette réparation existe déjà
+                    const existingResult = await query(
+                        'SELECT id_reparation, derniere_sync FROM Reparation WHERE id_reparation = $1',
+                        [firebaseReparationId]
+                    );
+
+                    if (existingResult.rows.length === 0 && data.id_signalement) {
+                        // ====== NOUVELLE RÉPARATION : Insérer ======
+                        const signalementResult = await query(
+                            'SELECT id_signalement FROM Signalement WHERE id_signalement = $1',
+                            [data.id_signalement]
+                        );
+
+                        if (signalementResult.rows.length > 0) {
+                            await query(
+                                `INSERT INTO Reparation 
+                                 (surface_m2, budget, id_entreprise, date_debut, 
+                                  date_fin_prevue, date_fin_reelle, commentaire, id_signalement, id_status, id_user,
+                                  est_synchronise, firebase_id, derniere_sync)
+                                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, CURRENT_TIMESTAMP)`,
+                                [
+                                    data.surface_m2 || 0,
+                                    data.budget || 0,
+                                    data.id_entreprise || 1,
+                                    data.date_debut || null,
+                                    data.date_fin_prevue || null,
+                                    data.date_fin_reelle || null,
+                                    data.commentaire || null,
+                                    data.id_signalement,
+                                    data.id_status || 2,
+                                    data.id_user || 1,
+                                    firebaseReparationId.toString()
+                                ]
+                            );
+
+                            // Mettre à jour Firebase avec marqueur de sync
+                            await db.collection('reparations').doc(doc.id).update({
+                                synced_to_postgres: true,
+                                last_postgres_sync: admin.firestore.FieldValue.serverTimestamp()
+                            });
+
+                            console.log(`✅ Réparation IMPORTÉE de Firebase: ${firebaseReparationId}`);
+                            reparationsSynced++;
+                        }
+                    } else if (existingResult.rows.length > 0) {
+                        // ====== RÉPARATION EXISTANTE : Vérifier si Firebase a des modifications plus récentes ======
+                        const existingRow = existingResult.rows[0];
+                        const postgresLastSync = existingRow.derniere_sync;
+
+                        const needsUpdate = firebaseUpdatedAt &&
+                            (!postgresLastSync || firebaseUpdatedAt > new Date(postgresLastSync));
+
+                        if (needsUpdate) {
+                            await query(
+                                `UPDATE Reparation 
+                                 SET surface_m2 = COALESCE($1, surface_m2),
+                                     budget = COALESCE($2, budget),
+                                     id_entreprise = COALESCE($3, id_entreprise),
+                                     date_debut = COALESCE($4, date_debut),
+                                     date_fin_prevue = COALESCE($5, date_fin_prevue),
+                                     date_fin_reelle = COALESCE($6, date_fin_reelle),
+                                     commentaire = COALESCE($7, commentaire),
+                                     id_status = COALESCE($8, id_status),
+                                     est_synchronise = TRUE,
+                                     derniere_sync = CURRENT_TIMESTAMP
+                                 WHERE id_reparation = $9`,
+                                [
+                                    data.surface_m2,
+                                    data.budget,
+                                    data.id_entreprise,
+                                    data.date_debut || null,
+                                    data.date_fin_prevue || null,
+                                    data.date_fin_reelle || null,
+                                    data.commentaire,
+                                    data.id_status,
+                                    firebaseReparationId
+                                ]
+                            );
+
+                            // Mettre à jour Firebase avec marqueur de sync
+                            await db.collection('reparations').doc(doc.id).update({
+                                synced_to_postgres: true,
+                                last_postgres_sync: admin.firestore.FieldValue.serverTimestamp()
+                            });
+
+                            console.log(`🔄 Réparation ${firebaseReparationId} MISE À JOUR depuis Firebase`);
+                            reparationsSynced++;
+                        }
+                    }
+                } catch (error) {
+                    console.error(`❌ Erreur import réparation ${doc.id}:`, error);
+                    errors++;
+                }
+            }
+
+            // ============================================
+            // 3. SYNCHRONISER L'HISTORIQUE DES STATUTS
+            // ============================================
+            const historiquesSnapshot = await db.collection('historique_status').get();
+            console.log(`📥 ${historiquesSnapshot.size} historiques de status trouvés dans Firebase`);
+
+            for (const doc of historiquesSnapshot.docs) {
+                try {
+                    const data = doc.data();
+                    const firebaseHistoriqueId = data.id_historique;
+
+                    // Vérifier si cet historique existe déjà
+                    const existingResult = await query(
+                        'SELECT id_historique FROM HistoriqueStatus WHERE id_historique = $1',
+                        [firebaseHistoriqueId]
+                    );
+
+                    if (existingResult.rows.length === 0 && data.id_reparation) {
+                        // ====== NOUVEL HISTORIQUE : Insérer ======
+                        const reparationResult = await query(
+                            'SELECT id_reparation FROM Reparation WHERE id_reparation = $1',
+                            [data.id_reparation]
+                        );
+
+                        if (reparationResult.rows.length > 0) {
+                            await query(
+                                `INSERT INTO HistoriqueStatus 
+                                 (id_reparation, id_status_ancien, id_status_nouveau, id_user, date_modification, commentaire)
+                                 VALUES ($1, $2, $3, $4, COALESCE($5, CURRENT_TIMESTAMP), $6)
+                                 ON CONFLICT DO NOTHING`,
+                                [
+                                    data.id_reparation,
+                                    data.id_status_ancien || null,
+                                    data.id_status_nouveau,
+                                    data.id_user || 1,
+                                    data.date_modification?.toDate ? data.date_modification.toDate() : null,
+                                    data.commentaire || null
+                                ]
+                            );
+
+                            console.log(`✅ Historique IMPORTÉ de Firebase: ${firebaseHistoriqueId}`);
+                            historiquesSynced++;
+                        }
+                    }
+                    // Note: Les historiques ne sont pas mis à jour, seulement insérés (données immuables)
+                } catch (error) {
+                    console.error(`❌ Erreur import historique ${doc.id}:`, error);
+                    errors++;
+                }
+            }
+
+            console.log(`✅ Depuis Firebase: ${signalementsSynced} signalements, ${reparationsSynced} réparations, ${historiquesSynced} historiques`);
+        } catch (error) {
+            console.error('❌ Erreur sync depuis Firebase:', error);
+            errors++;
+        }
+
+        return { signalements: signalementsSynced, reparations: reparationsSynced, historiques: historiquesSynced, errors };
     }
 
     // ============================================

@@ -1,6 +1,7 @@
 import * as admin from 'firebase-admin';
 import pool from '../config/database';
 import { isFirebaseOnline, getFirebaseStatus } from '../config/firebase';
+import { syncService } from './syncService';
 
 interface SignalementData {
   location?: { latitude: number; longitude: number };
@@ -97,14 +98,14 @@ export class HybridDataService {
    */
   private async createSignalementPostgres(data: SignalementData): Promise<{ id: string; source: 'postgres' }> {
     const query = `
-      INSERT INTO Signalement (latitude, longitude, description, id_user, id_status, est_synchronise)
-      VALUES ($1, $2, $3, $4, $5, FALSE)
+      INSERT INTO Signalement (location, description, id_user, id_status, est_synchronise, updated_at, sync_version)
+      VALUES (ST_SetSRID(ST_MakePoint($1, $2), 4326), $3, $4, $5, FALSE, NOW(), 1)
       RETURNING id_signalement
     `;
 
     const values = [
-      data.location?.latitude || null,
       data.location?.longitude || null,
+      data.location?.latitude || null,
       data.description || 'Signalement créé hors ligne',
       data.user_id,
       data.status_id || 1
@@ -151,8 +152,8 @@ export class HybridDataService {
     const query = `
       SELECT 
         s.id_signalement as id,
-        s.longitude,
-        s.latitude,
+        ST_X(s.location) as longitude,
+        ST_Y(s.location) as latitude,
         s.description,
         s.date_signalement,
         s.firebase_id,
@@ -287,6 +288,34 @@ export class HybridDataService {
    */
   public getStatus(): { initialized: boolean; available: boolean; lastCheck: number } {
     return getFirebaseStatus();
+  }
+
+  /**
+   * Déclenche une synchronisation bidirectionnelle complète
+   */
+  public async syncAll(): Promise<any> {
+    return await syncService.syncBidirectional();
+  }
+
+  /**
+   * Retourne les statistiques de synchronisation
+   */
+  public async getSyncStatistics(): Promise<any> {
+    return await syncService.getSyncStats();
+  }
+
+  /**
+   * Active/désactive la synchronisation automatique
+   */
+  public setAutoSync(enabled: boolean): void {
+    syncService.setAutoSync(enabled);
+  }
+
+  /**
+   * Vérifie si la synchronisation automatique est activée
+   */
+  public isAutoSyncEnabled(): boolean {
+    return syncService.isAutoSyncEnabled();
   }
 }
 

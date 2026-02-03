@@ -38,6 +38,7 @@ const database_1 = require("../config/database");
 const firebase_1 = require("../config/firebase");
 const hybridDataService_1 = require("./hybridDataService");
 const admin = __importStar(require("firebase-admin"));
+const userService_1 = require("./userService");
 /**
  * Service de gestion des tentatives de connexion et des paramètres
  * Synchronisé entre PostgreSQL (local) et Firebase
@@ -103,16 +104,78 @@ class LoginAttemptService {
     }
     /**
      * Vérifie le blocage avec les paramètres
+     * Retourne aussi si l'utilisateur est un manager (non bloçable)
      */
     static async checkBlocking(email) {
         const attempts = await this.getRecentFailedAttempts(email);
         const maxAttempts = await this.getAttemptLimit();
+        // Vérifier si l'utilisateur existe et est un manager
+        const user = await userService_1.UserService.findByEmail(email);
+        const isManager = user?.id_type_user === 3;
+        const isPermanentlyBlocked = user?.est_bloque === true;
         return {
-            isBlocked: attempts >= maxAttempts,
+            isBlocked: attempts >= maxAttempts && !isManager,
+            isManager,
+            isPermanentlyBlocked,
             attempts,
             maxAttempts,
             remainingAttempts: Math.max(0, maxAttempts - attempts)
         };
+    }
+    /**
+     * Bloque automatiquement un utilisateur après trop de tentatives
+     * Note: Les managers (type 3) ne peuvent pas être bloqués automatiquement
+     * @returns true si l'utilisateur a été bloqué, false sinon (manager ou utilisateur introuvable)
+     */
+    static async autoBlockUserIfNeeded(email) {
+        const blocageActif = await this.getParameterBoolean('activer_blocage_auto', true);
+        if (!blocageActif) {
+            return { blocked: false, reason: 'Blocage automatique désactivé' };
+        }
+        const blockInfo = await this.checkBlocking(email);
+        // Les managers ne peuvent pas être bloqués
+        if (blockInfo.isManager) {
+            console.log(`⚠️ Tentative de blocage automatique d'un manager (${email}) - Ignorée`);
+            return { blocked: false, reason: 'Les managers ne peuvent pas être bloqués' };
+        }
+        // Déjà bloqué
+        if (blockInfo.isPermanentlyBlocked) {
+            return { blocked: false, reason: 'Utilisateur déjà bloqué' };
+        }
+        // Vérifier si le seuil est atteint
+        if (blockInfo.isBlocked) {
+            const user = await userService_1.UserService.findByEmail(email);
+            if (user) {
+                try {
+                    await userService_1.UserService.blockUser(user.id_user);
+                    console.log(`🔒 Utilisateur ${email} bloqué automatiquement après ${blockInfo.attempts} tentatives échouées`);
+                    // Synchroniser vers Firebase si disponible
+                    const isOnline = await hybridDataService_1.hybridDataService.isFirebaseAvailable();
+                    if (isOnline && user.firebase_uid) {
+                        try {
+                            const db = (0, firebase_1.getFirestore)();
+                            await db.collection('User_').doc(user.firebase_uid).update({
+                                est_bloque: true,
+                                raison_blocage: 'Blocage automatique: trop de tentatives de connexion',
+                                date_blocage: admin.firestore.FieldValue.serverTimestamp()
+                            });
+                        }
+                        catch (fbError) {
+                            console.warn('⚠️ Erreur sync blocage vers Firebase:', fbError.message);
+                        }
+                    }
+                    return {
+                        blocked: true,
+                        reason: `Compte bloqué automatiquement après ${blockInfo.attempts} tentatives échouées`
+                    };
+                }
+                catch (error) {
+                    console.error('❌ Erreur blocage automatique:', error.message);
+                    return { blocked: false, reason: error.message };
+                }
+            }
+        }
+        return { blocked: false, reason: 'Seuil non atteint' };
     }
     /**
      * Réinitialise les tentatives de connexion pour un email

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import UserService from '../services/userService';
 import { hybridDataService } from '../services/hybridDataService';
+import { syncService } from '../services/syncService';
 import { authMiddleware, managerMiddleware } from '../middleware/auth';
 import { getAuth, getFirestore } from '../config/firebase';
 
@@ -93,13 +94,21 @@ router.post('/users/:id/unblock', authMiddleware, managerMiddleware, async (req:
     // Débloquer l'utilisateur localement
     await UserService.unblockUser(userId);
 
+    // Réinitialiser les tentatives de connexion échouées
+    const { LoginAttemptService } = await import('../services/loginAttemptService');
+    await LoginAttemptService.resetAttempts(user.email);
+    console.log(`✅ Tentatives de connexion réinitialisées pour: ${user.email}`);
+
     // Débloquer aussi dans Firestore si en ligne
     const isOnline = await hybridDataService.isFirebaseAvailable();
     if (isOnline && user.firebase_uid) {
       try {
         const db = getFirestore();
         await db.collection('User_').doc(user.firebase_uid).update({
-          est_bloque: false
+          est_bloque: false,
+          raison_blocage: null,
+          date_blocage: null,
+          date_deblocage: new Date()
         });
         console.log(`✅ Utilisateur débloqué dans Firestore: ${user.email}`);
       } catch (firebaseError: any) {
@@ -110,6 +119,9 @@ router.post('/users/:id/unblock', authMiddleware, managerMiddleware, async (req:
     res.status(200).json({
       success: true,
       message: `Utilisateur ${user.email} débloqué avec succès`,
+      details: {
+        tentatives_reinitialisees: true
+      },
       user: {
         id: user.id_user,
         firebase_uid: user.firebase_uid,
@@ -588,6 +600,179 @@ router.post('/firebase/users/:uid/enable', authMiddleware, managerMiddleware, as
     });
   } catch (error: any) {
     console.error('Erreur enable Firebase user:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/admin/sync/status:
+ *   get:
+ *     summary: Obtenir le statut de la synchronisation
+ *     tags: [Administration, Synchronisation]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Statut de la synchronisation
+ */
+router.get('/sync/status', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const isOnline = await hybridDataService.isFirebaseAvailable();
+    const stats = await syncService.getSyncStats();
+
+    res.status(200).json({
+      success: true,
+      firebase_connected: isOnline,
+      sync_stats: stats
+    });
+  } catch (error: any) {
+    console.error('Erreur statut sync:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/admin/sync/execute:
+ *   post:
+ *     summary: Déclencher une synchronisation bidirectionnelle manuelle
+ *     tags: [Administration, Synchronisation]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Synchronisation effectuée
+ */
+router.post('/sync/execute', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const isOnline = await hybridDataService.isFirebaseAvailable();
+
+    if (!isOnline) {
+      res.status(503).json({
+        success: false,
+        error: 'Firebase non disponible. Synchronisation impossible.'
+      });
+      return;
+    }
+
+    console.log('🔄 Démarrage synchronisation manuelle...');
+    const result = await syncService.syncBidirectional();
+
+    res.status(200).json({
+      success: result.success,
+      message: 'Synchronisation terminée',
+      results: {
+        synced: result.synced,
+        conflicts: result.conflicts,
+        errors: result.errors,
+        details: result.details
+      }
+    });
+  } catch (error: any) {
+    console.error('Erreur synchronisation:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la synchronisation'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/admin/sync/auto:
+ *   post:
+ *     summary: Activer/désactiver la synchronisation automatique
+ *     tags: [Administration, Synchronisation]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               enabled:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Configuration mise à jour
+ */
+router.post('/sync/auto', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { enabled } = req.body;
+
+    if (typeof enabled !== 'boolean') {
+      res.status(400).json({
+        success: false,
+        error: 'Le paramètre "enabled" doit être un booléen'
+      });
+      return;
+    }
+
+    syncService.setAutoSync(enabled);
+
+    res.status(200).json({
+      success: true,
+      message: `Synchronisation automatique ${enabled ? 'activée' : 'désactivée'}`,
+      auto_sync_enabled: enabled
+    });
+  } catch (error: any) {
+    console.error('Erreur configuration auto-sync:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur'
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/admin/sync/conflicts:
+ *   get:
+ *     summary: Obtenir la liste des conflits de synchronisation
+ *     tags: [Administration, Synchronisation]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Liste des conflits
+ */
+router.get('/sync/conflicts', authMiddleware, managerMiddleware, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const query = `
+      SELECT 
+        sl.Id_SyncLog,
+        sl.table_name,
+        sl.record_id,
+        sl.firebase_id,
+        sl.operation,
+        sl.status,
+        sl.error_message,
+        sl.sync_date
+      FROM SyncLog sl
+      WHERE sl.status = 'CONFLICT'
+      ORDER BY sl.sync_date DESC
+      LIMIT 100
+    `;
+
+    const pool = require('../config/database').default;
+    const result = await pool.query(query);
+
+    res.status(200).json({
+      success: true,
+      count: result.rows.length,
+      conflicts: result.rows
+    });
+  } catch (error: any) {
+    console.error('Erreur récupération conflits:', error);
     res.status(500).json({
       success: false,
       error: 'Erreur serveur'
