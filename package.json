@@ -13,7 +13,11 @@
     "firebase-status": "ts-node src/scripts/firebaseSetup.ts status",
     "firebase-reset": "ts-node src/scripts/firebaseSetup.ts reset",
     "firebase-sample": "ts-node src/scripts/firebaseSetup.ts sample",
-    "firebase-clear": "ts-node src/scripts/firebaseSetup.ts clear"
+    "firebase-clear": "ts-node src/scripts/firebaseSetup.ts clear",
+    "sync:firebase": "ts-node src/scripts/syncToFirebase.ts",
+    "firebase-collections:init": "ts-node src/scripts/initFirebaseCollections.ts init",
+    "firebase-collections:check": "ts-node src/scripts/initFirebaseCollections.ts check",
+    "firebase-collections:reset": "ts-node src/scripts/initFirebaseCollections.ts reset"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
