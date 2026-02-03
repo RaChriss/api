@@ -317,6 +317,14 @@ export class HybridDataService {
   public isAutoSyncEnabled(): boolean {
     return syncService.isAutoSyncEnabled();
   }
+
+  /**
+   * Exécute une requête PostgreSQL directement
+   * Utile pour les requêtes complexes avec filtrage et pagination
+   */
+  public async query(queryText: string, params?: any[]): Promise<any> {
+    return await pool.query(queryText, params || []);
+  }
 }
 
 export const hybridDataService = HybridDataService.getInstance();

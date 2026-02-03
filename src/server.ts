@@ -13,6 +13,7 @@ import firebaseRoutes from './routes/firebase';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
 import signalementRoutes from './routes/signalements';
+import usersRoutes from './routes/users';
 
 // Load environment variables
 dotenv.config();
@@ -100,12 +101,24 @@ app.get('/api', async (req: Request, res: Response) => {
     endpoints: {
       documentation: 'GET /api/docs',
       auth: {
-        register: 'POST /api/auth/register',
+        register: '⚠️ DÉSACTIVÉ - POST /api/auth/register',
         login: 'POST /api/auth/login',
         logout: 'POST /api/auth/logout',
         me: 'GET /api/auth/me',
         update: 'PUT /api/auth/update',
         verifySession: 'GET /api/auth/verify-session'
+      },
+      users: {
+        description: '🔐 Manager uniquement - CRUD complet des utilisateurs',
+        list: 'GET /api/users',
+        search: 'GET /api/users/search?q=...',
+        getById: 'GET /api/users/:id',
+        create: 'POST /api/users',
+        update: 'PUT /api/users/:id',
+        delete: 'DELETE /api/users/:id',
+        block: 'POST /api/users/:id/block',
+        unblock: 'POST /api/users/:id/unblock',
+        stats: 'GET /api/users/stats/summary'
       },
       admin: {
         users: 'GET /api/admin/users',
@@ -156,6 +169,9 @@ app.use('/api', connectionMiddleware);
 
 // Auth routes
 app.use('/api/auth', authRoutes);
+
+// Users routes (Manager uniquement - CRUD complet)
+app.use('/api/users', usersRoutes);
 
 // Admin routes  
 app.use('/api/admin', adminRoutes);

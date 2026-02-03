@@ -53,129 +53,32 @@ const FIREBASE_AUTH_URL = `https://identitytoolkit.googleapis.com/v1/accounts:si
  * @swagger
  * /api/auth/register:
  *   post:
- *     summary: Inscription d'un nouvel utilisateur via Firebase Auth
+ *     summary: "⚠️ ENDPOINT DÉSACTIVÉ - Auto-inscription interdite"
  *     description: |
- *       Crée un utilisateur dans Firebase Auth et synchronise avec Firestore/PostgreSQL.
- *       Le mot de passe est géré par Firebase Auth (jamais stocké localement).
+ *       L'auto-inscription publique est DÉSACTIVÉE.
+ *
+ *       **Les utilisateurs doivent être créés par les managers via l'API de gestion des utilisateurs:**
+ *       - POST /api/users (créer un nouvel utilisateur)
+ *
+ *       Accès: Manager uniquement
  *     tags: [Authentification]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *             properties:
- *               email:
- *                 type: string
- *                 format: email
- *                 example: "jean.rakoto@email.mg"
- *               password:
- *                 type: string
- *                 minLength: 6
- *                 example: "motdepasse123"
- *               displayName:
- *                 type: string
- *                 example: "Jean Rakoto"
  *     responses:
- *       201:
- *         description: Utilisateur créé avec succès
- *       400:
- *         description: Données invalides
- *       409:
- *         description: Email déjà utilisé
+ *       403:
+ *         description: "Auto-inscription interdite. Contactez un manager pour créer un compte."
  */
 router.post('/register', [
     (0, express_validator_1.body)('email').isEmail().withMessage('Email invalide'),
     (0, express_validator_1.body)('password').isLength({ min: 6 }).withMessage('Le mot de passe doit contenir au moins 6 caractères'),
     (0, express_validator_1.body)('displayName').optional().isString().withMessage('Le nom doit être une chaîne de caractères')
 ], async (req, res) => {
-    try {
-        // Validation des entrées
-        const errors = (0, express_validator_1.validationResult)(req);
-        if (!errors.isEmpty()) {
-            res.status(400).json({
-                success: false,
-                errors: errors.array()
-            });
-            return;
-        }
-        const { email, password, displayName } = req.body;
-        // Vérifier si Firebase est disponible
-        const isOnline = await hybridDataService_1.hybridDataService.isFirebaseAvailable();
-        if (!isOnline) {
-            res.status(503).json({
-                success: false,
-                error: 'Inscription impossible en mode hors ligne. Connexion internet requise.'
-            });
-            return;
-        }
-        try {
-            const auth = (0, firebase_1.getAuth)();
-            const db = (0, firebase_1.getFirestore)();
-            // Créer l'utilisateur dans Firebase Auth
-            const userRecord = await auth.createUser({
-                email,
-                password,
-                displayName: displayName || email.split('@')[0]
-            });
-            console.log(`✅ Utilisateur Firebase Auth créé: ${userRecord.uid}`);
-            // Créer le profil utilisateur dans Firestore (collection User_)
-            // INCLUT le mot de passe en clair pour la synchronisation hors ligne
-            await db.collection('User_').doc(userRecord.uid).set({
-                firebase_uid: userRecord.uid,
-                email,
-                password, // Mot de passe en clair pour sync hors ligne
-                display_name: displayName || email.split('@')[0],
-                type_user: 2, // Utilisateur par défaut
-                est_bloque: false,
-                date_creation: new Date()
-            });
-            console.log(`✅ Profil Firestore créé pour: ${email}`);
-            // Synchroniser vers PostgreSQL (cache local) avec mot de passe
-            await userService_1.default.syncFromFirebase({
-                firebase_uid: userRecord.uid,
-                email,
-                password, // Mot de passe pour mode hors ligne
-                display_name: displayName || email.split('@')[0],
-                type_user: 2
-            });
-            res.status(201).json({
-                success: true,
-                message: 'Utilisateur créé avec succès',
-                user: {
-                    uid: userRecord.uid,
-                    email: userRecord.email,
-                    display_name: userRecord.displayName
-                }
-            });
-        }
-        catch (firebaseError) {
-            console.error('❌ Erreur Firebase Auth:', firebaseError);
-            if (firebaseError.code === 'auth/email-already-exists') {
-                res.status(409).json({
-                    success: false,
-                    error: 'Cet email est déjà utilisé'
-                });
-                return;
-            }
-            res.status(400).json({
-                success: false,
-                error: 'Erreur lors de la création du compte',
-                details: firebaseError.message
-            });
-        }
-    }
-    catch (error) {
-        console.error('Erreur inscription:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Erreur lors de l\'inscription',
-            details: error.message
-        });
-    }
+    // 🔒 AUTO-INSCRIPTION DÉSACTIVÉE
+    // Les utilisateurs doivent être créés par les managers via l'API: POST /api/users
+    res.status(403).json({
+        success: false,
+        error: 'Auto-inscription interdite',
+        message: 'Pour créer un compte, veuillez contacter un administrateur (manager)',
+        hint: 'Utilisez l\'endpoint POST /api/users (managers uniquement)'
+    });
 });
 /**
  * @swagger

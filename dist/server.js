@@ -17,6 +17,7 @@ const firebase_2 = __importDefault(require("./routes/firebase"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const admin_1 = __importDefault(require("./routes/admin"));
 const signalements_1 = __importDefault(require("./routes/signalements"));
+const users_1 = __importDefault(require("./routes/users"));
 // Load environment variables
 dotenv_1.default.config();
 // Initialize Firebase
@@ -91,12 +92,24 @@ app.get('/api', async (req, res) => {
         endpoints: {
             documentation: 'GET /api/docs',
             auth: {
-                register: 'POST /api/auth/register',
+                register: '⚠️ DÉSACTIVÉ - POST /api/auth/register',
                 login: 'POST /api/auth/login',
                 logout: 'POST /api/auth/logout',
                 me: 'GET /api/auth/me',
                 update: 'PUT /api/auth/update',
                 verifySession: 'GET /api/auth/verify-session'
+            },
+            users: {
+                description: '🔐 Manager uniquement - CRUD complet des utilisateurs',
+                list: 'GET /api/users',
+                search: 'GET /api/users/search?q=...',
+                getById: 'GET /api/users/:id',
+                create: 'POST /api/users',
+                update: 'PUT /api/users/:id',
+                delete: 'DELETE /api/users/:id',
+                block: 'POST /api/users/:id/block',
+                unblock: 'POST /api/users/:id/unblock',
+                stats: 'GET /api/users/stats/summary'
             },
             admin: {
                 users: 'GET /api/admin/users',
@@ -143,6 +156,8 @@ app.get('/api', async (req, res) => {
 app.use('/api', connection_1.connectionMiddleware);
 // Auth routes
 app.use('/api/auth', auth_1.default);
+// Users routes (Manager uniquement - CRUD complet)
+app.use('/api/users', users_1.default);
 // Admin routes  
 app.use('/api/admin', admin_1.default);
 // Firebase routes
