@@ -172,7 +172,7 @@ export class LoginAttemptService {
           if (isOnline && user.firebase_uid) {
             try {
               const db = getFirestore();
-              await db.collection('User_').doc(user.firebase_uid).update({
+              await db.collection('users').doc(user.firebase_uid).update({
                 est_bloque: true,
                 raison_blocage: 'Blocage automatique: trop de tentatives de connexion',
                 date_blocage: admin.firestore.FieldValue.serverTimestamp()

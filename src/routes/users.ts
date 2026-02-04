@@ -4,6 +4,8 @@ import UserService, { CreateUserDTO, UpdateUserDTO } from '../services/userServi
 import { authMiddleware, managerMiddleware } from '../middleware/auth';
 import { getAuth, getFirestore } from '../config/firebase';
 import { hybridDataService } from '../services/hybridDataService';
+import { emailService } from '../services/emailService';
+import * as admin from 'firebase-admin';
 
 const router = Router();
 
@@ -455,20 +457,7 @@ router.post('/',
 
                 console.log(`✅ Utilisateur Firebase Auth créé: ${userRecord.uid}`);
 
-                // Créer le profil dans Firestore
-                await db.collection('User_').doc(userRecord.uid).set({
-                    firebase_uid: userRecord.uid,
-                    email,
-                    password,
-                    display_name,
-                    id_type_user: type_user,
-                    est_bloque: false,
-                    date_creation: new Date()
-                });
-
-                console.log(`✅ Profil Firestore créé pour: ${email}`);
-
-                // Synchroniser vers PostgreSQL
+                // Synchroniser vers PostgreSQL d'abord pour obtenir l'id_user
                 const user = await UserService.syncFromFirebase({
                     firebase_uid: userRecord.uid,
                     email,
@@ -476,6 +465,23 @@ router.post('/',
                     display_name,
                     type_user
                 });
+
+                const now = new Date();
+
+                // Créer le profil dans Firestore avec le format attendu
+                await db.collection('users').doc(userRecord.uid).set({
+                    date_creation: now,
+                    derniere_sync: now,
+                    display_name,
+                    email,
+                    est_bloque: false,
+                    firebase_uid: userRecord.uid,
+                    id_type_user: type_user,
+                    id_user: user.id_user,
+                    password
+                });
+
+                console.log(`✅ Profil Firestore créé pour: ${email}`);
 
                 res.status(201).json({
                     success: true,
@@ -621,6 +627,40 @@ router.put('/:id',
             }
 
             const updatedUser = await UserService.update(userId, updateData);
+
+            // Synchroniser vers Firebase si en ligne
+            const isOnline = await hybridDataService.isFirebaseAvailable();
+            if (isOnline && user.firebase_uid) {
+                try {
+                    const auth = getAuth();
+                    const db = getFirestore();
+
+                    // Mettre à jour Firebase Auth
+                    const authUpdate: any = {};
+                    if (updateData.display_name) authUpdate.displayName = updateData.display_name;
+                    if (updateData.email) authUpdate.email = updateData.email;
+                    if (updateData.password) authUpdate.password = updateData.password;
+
+                    if (Object.keys(authUpdate).length > 0) {
+                        await auth.updateUser(user.firebase_uid, authUpdate);
+                    }
+
+                    // Mettre à jour Firestore avec le bon format
+                    const firestoreUpdate: any = {
+                        derniere_sync: new Date()
+                    };
+                    if (updateData.display_name !== undefined) firestoreUpdate.display_name = updateData.display_name;
+                    if (updateData.email !== undefined) firestoreUpdate.email = updateData.email;
+                    if (updateData.password !== undefined) firestoreUpdate.password = updateData.password;
+                    if (updateData.type_user !== undefined) firestoreUpdate.id_type_user = updateData.type_user;
+
+                    await db.collection('users').doc(user.firebase_uid).update(firestoreUpdate);
+
+                    console.log(`✅ Utilisateur synchronisé vers Firebase: ${updatedUser!.email}`);
+                } catch (firebaseError: any) {
+                    console.warn('⚠️ Erreur synchronisation Firebase:', firebaseError.message);
+                }
+            }
 
             res.status(200).json({
                 success: true,
@@ -856,6 +896,132 @@ router.get('/stats/summary',
         } catch (error: any) {
             console.error('Erreur stats:', error);
             res.status(500).json({ success: false, error: 'Erreur serveur' });
+        }
+    }
+);
+
+// ============================================
+// ENVOI DES IDENTIFIANTS PAR EMAIL
+// ============================================
+
+/**
+ * @swagger
+ * /api/users/{id}/send-credentials:
+ *   post:
+ *     summary: Envoyer les identifiants de connexion par email
+ *     description: |
+ *       Envoie un email à l'utilisateur avec ses informations de connexion (email + mot de passe).
+ *       **Accès**: Manager uniquement
+ *     tags: [Gestion Utilisateurs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID de l'utilisateur
+ *     responses:
+ *       200:
+ *         description: Email envoyé avec succès
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       400:
+ *         description: Utilisateur sans email
+ *       404:
+ *         description: Utilisateur non trouvé
+ *       500:
+ *         description: Erreur serveur ou email non envoyé
+ */
+router.post('/:id/send-credentials',
+    authMiddleware,
+    managerMiddleware,
+    async (req: Request, res: Response): Promise<void> => {
+        try {
+            const userId = parseInt(req.params.id, 10);
+
+            if (isNaN(userId)) {
+                res.status(400).json({
+                    success: false,
+                    error: 'ID utilisateur invalide'
+                });
+                return;
+            }
+
+            // Récupérer l'utilisateur avec son mot de passe
+            const result = await hybridDataService.query(
+                'SELECT id_user, email, password, display_name FROM User_ WHERE id_user = $1',
+                [userId]
+            );
+
+            if (result.rows.length === 0) {
+                res.status(404).json({
+                    success: false,
+                    error: 'Utilisateur non trouvé'
+                });
+                return;
+            }
+
+            const user = result.rows[0];
+
+            if (!user.email) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Cet utilisateur n\'a pas d\'adresse email'
+                });
+                return;
+            }
+
+            if (!user.password) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Cet utilisateur n\'a pas de mot de passe défini'
+                });
+                return;
+            }
+
+            // Vérifier si le service email est configuré
+            if (!emailService.isReady()) {
+                res.status(500).json({
+                    success: false,
+                    error: 'Service email non configuré. Vérifiez EMAIL_USER et EMAIL_PASSWORD dans .env'
+                });
+                return;
+            }
+
+            // Envoyer l'email avec les identifiants
+            const emailResult = await emailService.sendWelcomeEmail({
+                email: user.email,
+                displayName: user.display_name || user.email.split('@')[0],
+                temporaryPassword: user.password  // Mot de passe stocké directement
+            });
+
+            if (emailResult.success) {
+                console.log(`📧 Identifiants envoyés à ${user.email}`);
+                res.status(200).json({
+                    success: true,
+                    message: `Les identifiants ont été envoyés à ${user.email}`
+                });
+            } else {
+                res.status(500).json({
+                    success: false,
+                    error: `Impossible d'envoyer l'email: ${emailResult.error}`
+                });
+            }
+        } catch (error: any) {
+            console.error('Erreur envoi identifiants:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Erreur serveur'
+            });
         }
     }
 );

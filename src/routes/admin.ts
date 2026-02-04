@@ -104,7 +104,7 @@ router.post('/users/:id/unblock', authMiddleware, managerMiddleware, async (req:
     if (isOnline && user.firebase_uid) {
       try {
         const db = getFirestore();
-        await db.collection('User_').doc(user.firebase_uid).update({
+        await db.collection('users').doc(user.firebase_uid).update({
           est_bloque: false,
           raison_blocage: null,
           date_blocage: null,
@@ -187,7 +187,7 @@ router.post('/users/:id/block', authMiddleware, managerMiddleware, async (req: R
     if (isOnline && user.firebase_uid) {
       try {
         const db = getFirestore();
-        await db.collection('User_').doc(user.firebase_uid).update({
+        await db.collection('users').doc(user.firebase_uid).update({
           est_bloque: true
         });
         console.log(`✅ Utilisateur bloqué dans Firestore: ${user.email}`);
@@ -329,7 +329,7 @@ router.put('/users/:id/update-type', authMiddleware, managerMiddleware, async (r
     if (isOnline && user.firebase_uid) {
       try {
         const db = getFirestore();
-        await db.collection('User_').doc(user.firebase_uid).update({
+        await db.collection('users').doc(user.firebase_uid).update({
           type_user
         });
         console.log(`✅ Type utilisateur mis à jour dans Firestore: ${user.email}`);
@@ -426,7 +426,7 @@ router.post('/sync/users', authMiddleware, managerMiddleware, async (req: Reques
           continue;
         }
 
-        await db.collection('User_').doc(user.firebase_uid).set({
+        await db.collection('users').doc(user.firebase_uid).set({
           firebase_uid: user.firebase_uid,
           email: user.email,
           display_name: user.display_name,
@@ -666,13 +666,12 @@ router.post('/sync/execute', authMiddleware, managerMiddleware, async (req: Requ
     const result = await syncService.syncBidirectional();
 
     res.status(200).json({
-      success: result.success,
+      success: true,
       message: 'Synchronisation terminée',
       results: {
-        synced: result.synced,
-        conflicts: result.conflicts,
-        errors: result.errors,
-        details: result.details
+        totals: result.totals,
+        firebase_to_postgres: result.firebaseToPostgres,
+        postgres_to_firebase: result.postgresToFirebase
       }
     });
   } catch (error: any) {

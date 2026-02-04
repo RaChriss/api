@@ -40,6 +40,7 @@ const express_1 = require("express");
 const admin = __importStar(require("firebase-admin"));
 const database_1 = __importDefault(require("../config/database"));
 const auth_1 = require("../middleware/auth");
+const emailService_1 = require("../services/emailService");
 const router = (0, express_1.Router)();
 /**
  * POST /api/firebase/verify-token
@@ -77,11 +78,16 @@ router.post('/verify-token', async (req, res) => {
 });
 /**
  * POST /api/firebase/create-user
- * Crée un utilisateur dans Firebase Authentication
+ * Crée un utilisateur dans Firebase Authentication et envoie optionnellement un email
+ * @body {string} email - Email de l'utilisateur (requis)
+ * @body {string} password - Mot de passe (requis)
+ * @body {string} displayName - Nom d'affichage
+ * @body {string} phoneNumber - Numéro de téléphone
+ * @body {boolean} sendEmail - Envoyer un email avec les identifiants (défaut: true)
  */
-router.post('/create-user', async (req, res) => {
+router.post('/create-user', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
     try {
-        const { email, password, displayName, phoneNumber } = req.body;
+        const { email, password, displayName, phoneNumber, sendEmail = true } = req.body;
         if (!email || !password) {
             res.status(400).json({
                 error: 'Email and password are required'
@@ -95,6 +101,25 @@ router.post('/create-user', async (req, res) => {
             displayName,
             phoneNumber
         });
+        console.log(`✅ Utilisateur Firebase créé: ${userRecord.uid} (${email})`);
+        // Envoyer l'email de bienvenue si demandé
+        let emailSent = false;
+        let emailError = null;
+        if (sendEmail) {
+            const emailResult = await emailService_1.emailService.sendWelcomeEmail({
+                email,
+                displayName: displayName || email.split('@')[0],
+                temporaryPassword: password
+            });
+            emailSent = emailResult.success;
+            emailError = emailResult.error;
+            if (emailSent) {
+                console.log(`📧 Email de bienvenue envoyé à ${email}`);
+            }
+            else {
+                console.warn(`⚠️ Impossible d'envoyer l'email à ${email}: ${emailError}`);
+            }
+        }
         res.status(201).json({
             success: true,
             user: {
@@ -103,6 +128,10 @@ router.post('/create-user', async (req, res) => {
                 displayName: userRecord.displayName,
                 phoneNumber: userRecord.phoneNumber,
                 createdAt: userRecord.metadata.creationTime
+            },
+            email: {
+                sent: emailSent,
+                error: emailError
             }
         });
     }

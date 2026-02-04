@@ -82,7 +82,7 @@ export async function authMiddleware(
         if (!user) {
           // Synchroniser depuis Firestore si pas en cache
           const db = getFirestore();
-          const userDoc = await db.collection('User_').doc(decodedToken.uid).get();
+          const userDoc = await db.collection('users').doc(decodedToken.uid).get();
 
           if (userDoc.exists) {
             const userData = userDoc.data()!;

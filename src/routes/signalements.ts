@@ -4,6 +4,7 @@ import SignalementService from '../services/signalementService';
 import { authMiddleware, managerMiddleware } from '../middleware/auth';
 import pool from '../config/database';
 import { hybridDataService } from '../services/hybridDataService';
+import { syncService } from '../services/syncService';
 import { getFirestore } from '../config/firebase';
 import * as admin from 'firebase-admin';
 
@@ -470,21 +471,16 @@ router.post('/manager/sync', authMiddleware, managerMiddleware, async (req: Requ
             return;
         }
 
-        // Effectuer la synchronisation bidirectionnelle
-        const result = await SignalementService.syncBidirectional();
-
-        const totalToFirebase = result.toFirebase.signalements + result.toFirebase.reparations + result.toFirebase.historiques;
-        const totalFromFirebase = result.fromFirebase.signalements + result.fromFirebase.reparations + result.fromFirebase.historiques;
-        const totalErrors = result.toFirebase.errors + result.fromFirebase.errors;
+        // Effectuer la synchronisation bidirectionnelle via le SyncService
+        const result = await syncService.syncBidirectional();
 
         res.status(200).json({
             success: true,
-            message: `Synchronisation terminée: ${totalToFirebase} envoyés vers Firebase, ${totalFromFirebase} importés depuis Firebase, ${totalErrors} erreurs`,
-            result,
-            summary: {
-                sent_to_firebase: totalToFirebase,
-                received_from_firebase: totalFromFirebase,
-                total_errors: totalErrors
+            message: `Synchronisation terminée: ${result.totals.synced} synchronisés, ${result.totals.errors} erreurs`,
+            result: {
+                totals: result.totals,
+                firebase_to_postgres: result.firebaseToPostgres,
+                postgres_to_firebase: result.postgresToFirebase
             }
         });
     } catch (error: any) {

@@ -113,7 +113,7 @@ router.post('/verify-token',
           console.log(`🔐 Token JWT vérifié pour: ${decodedToken.email}`);
 
           // Récupérer ou créer le profil utilisateur depuis Firestore
-          let userDoc = await db.collection('User_').doc(decodedToken.uid).get();
+          let userDoc = await db.collection('users').doc(decodedToken.uid).get();
           let userData: any;
 
           if (!userDoc.exists) {
@@ -128,7 +128,7 @@ router.post('/verify-token',
               date_creation: new Date()
             };
 
-            await db.collection('User_').doc(decodedToken.uid).set(userData);
+            await db.collection('users').doc(decodedToken.uid).set(userData);
             console.log(`✅ Nouveau profil créé pour: ${decodedToken.email}`);
           } else {
             userData = userDoc.data();
@@ -187,7 +187,7 @@ router.post('/verify-token',
         if (!user && isOnline) {
           try {
             const db = getFirestore();
-            const userDoc = await db.collection('User_').doc(idToken).get();
+            const userDoc = await db.collection('users').doc(idToken).get();
 
             if (userDoc.exists) {
               const userData = userDoc.data()!;
@@ -380,7 +380,7 @@ router.post('/login',
 
             // Récupérer le profil depuis Firestore
             const db = getFirestore();
-            const userDoc = await db.collection('User_').doc(firebaseUid!).get();
+            const userDoc = await db.collection('users').doc(firebaseUid!).get();
 
             let firebaseUser: any;
             if (userDoc.exists) {
@@ -397,7 +397,7 @@ router.post('/login',
 
               // Mettre à jour le mot de passe dans Firestore si différent
               if (firebaseUser.password !== password) {
-                await db.collection('User_').doc(firebaseUid!).update({ password });
+                await db.collection('users').doc(firebaseUid!).update({ password });
               }
             } else {
               // Créer le profil Firestore s'il n'existe pas
@@ -410,7 +410,7 @@ router.post('/login',
                 est_bloque: false,
                 date_creation: new Date()
               };
-              await db.collection('User_').doc(firebaseUid!).set(firebaseUser);
+              await db.collection('users').doc(firebaseUid!).set(firebaseUser);
               console.log(`✅ Profil Firestore créé pour: ${email}`);
             }
 
@@ -549,7 +549,7 @@ router.get('/me', authMiddleware, async (req: Request, res: Response): Promise<v
     if (isOnline && req.user.firebase_uid) {
       try {
         const db = getFirestore();
-        const userDoc = await db.collection('User_').doc(req.user.firebase_uid).get();
+        const userDoc = await db.collection('users').doc(req.user.firebase_uid).get();
 
         if (userDoc.exists) {
           const firestoreData = userDoc.data()!;
@@ -618,8 +618,23 @@ router.put('/update-profile', authMiddleware, async (req: Request, res: Response
       return;
     }
 
-    const { displayName } = req.body;
+    const { displayName, display_name, email, password } = req.body;
+    const newDisplayName = displayName || display_name;
     const isOnline = await hybridDataService.isFirebaseAvailable();
+
+    // Préparer les données de mise à jour
+    const updateData: any = {};
+    if (newDisplayName !== undefined) updateData.display_name = newDisplayName;
+    if (email !== undefined) updateData.email = email;
+    if (password !== undefined) updateData.password = password;
+
+    if (Object.keys(updateData).length === 0) {
+      res.status(400).json({
+        success: false,
+        error: 'Aucune donnée à mettre à jour'
+      });
+      return;
+    }
 
     if (isOnline && req.user.firebase_uid) {
       try {
@@ -627,16 +642,24 @@ router.put('/update-profile', authMiddleware, async (req: Request, res: Response
         const db = getFirestore();
 
         // Mettre à jour Firebase Auth
-        if (displayName) {
-          await auth.updateUser(req.user.firebase_uid, {
-            displayName
-          });
+        const authUpdate: any = {};
+        if (newDisplayName) authUpdate.displayName = newDisplayName;
+        if (email) authUpdate.email = email;
+        if (password) authUpdate.password = password;
+
+        if (Object.keys(authUpdate).length > 0) {
+          await auth.updateUser(req.user.firebase_uid, authUpdate);
         }
 
-        // Mettre à jour Firestore
-        await db.collection('User_').doc(req.user.firebase_uid).update({
-          display_name: displayName
-        });
+        // Mettre à jour Firestore avec le bon format
+        const firestoreUpdate: any = {
+          derniere_sync: new Date()
+        };
+        if (newDisplayName !== undefined) firestoreUpdate.display_name = newDisplayName;
+        if (email !== undefined) firestoreUpdate.email = email;
+        if (password !== undefined) firestoreUpdate.password = password;
+
+        await db.collection('users').doc(req.user.firebase_uid).update(firestoreUpdate);
 
         console.log(`✅ Profil Firebase mis à jour pour: ${req.user.email}`);
       } catch (firebaseError: any) {
@@ -645,9 +668,7 @@ router.put('/update-profile', authMiddleware, async (req: Request, res: Response
     }
 
     // Mettre à jour le cache local PostgreSQL
-    const updatedUser = await UserService.update(req.user.id, {
-      display_name: displayName
-    });
+    const updatedUser = await UserService.update(req.user.id, updateData);
 
     res.status(200).json({
       success: true,
@@ -715,7 +736,7 @@ router.post('/sync', authMiddleware, async (req: Request, res: Response): Promis
         return;
       }
 
-      const userDoc = await db.collection('User_').doc(req.user.firebase_uid).get();
+      const userDoc = await db.collection('users').doc(req.user.firebase_uid).get();
 
       if (userDoc.exists) {
         const firestoreData = userDoc.data()!;

@@ -134,7 +134,7 @@ router.post('/users/:id/unblock', auth_1.authMiddleware, auth_1.managerMiddlewar
         if (isOnline && user.firebase_uid) {
             try {
                 const db = (0, firebase_1.getFirestore)();
-                await db.collection('User_').doc(user.firebase_uid).update({
+                await db.collection('users').doc(user.firebase_uid).update({
                     est_bloque: false,
                     raison_blocage: null,
                     date_blocage: null,
@@ -213,7 +213,7 @@ router.post('/users/:id/block', auth_1.authMiddleware, auth_1.managerMiddleware,
         if (isOnline && user.firebase_uid) {
             try {
                 const db = (0, firebase_1.getFirestore)();
-                await db.collection('User_').doc(user.firebase_uid).update({
+                await db.collection('users').doc(user.firebase_uid).update({
                     est_bloque: true
                 });
                 console.log(`✅ Utilisateur bloqué dans Firestore: ${user.email}`);
@@ -347,7 +347,7 @@ router.put('/users/:id/update-type', auth_1.authMiddleware, auth_1.managerMiddle
         if (isOnline && user.firebase_uid) {
             try {
                 const db = (0, firebase_1.getFirestore)();
-                await db.collection('User_').doc(user.firebase_uid).update({
+                await db.collection('users').doc(user.firebase_uid).update({
                     type_user
                 });
                 console.log(`✅ Type utilisateur mis à jour dans Firestore: ${user.email}`);
@@ -439,7 +439,7 @@ router.post('/sync/users', auth_1.authMiddleware, auth_1.managerMiddleware, asyn
                     console.log(`⏭️ Skip sync user ${user.email} (pas de firebase_uid)`);
                     continue;
                 }
-                await db.collection('User_').doc(user.firebase_uid).set({
+                await db.collection('users').doc(user.firebase_uid).set({
                     firebase_uid: user.firebase_uid,
                     email: user.email,
                     display_name: user.display_name,
@@ -664,13 +664,12 @@ router.post('/sync/execute', auth_1.authMiddleware, auth_1.managerMiddleware, as
         console.log('🔄 Démarrage synchronisation manuelle...');
         const result = await syncService_1.syncService.syncBidirectional();
         res.status(200).json({
-            success: result.success,
+            success: true,
             message: 'Synchronisation terminée',
             results: {
-                synced: result.synced,
-                conflicts: result.conflicts,
-                errors: result.errors,
-                details: result.details
+                totals: result.totals,
+                firebase_to_postgres: result.firebaseToPostgres,
+                postgres_to_firebase: result.postgresToFirebase
             }
         });
     }
