@@ -2,17 +2,13 @@ import { Router, Request, Response } from 'express';
 import { body, validationResult } from 'express-validator';
 import UserService from '../services/userService';
 import { hybridDataService } from '../services/hybridDataService';
-import { getAuth, getFirestore } from '../config/firebase';
+import { getFirestore } from '../config/firebase';
 import { getUserTypeName } from '../utils/userTypes';
 import { authMiddleware } from '../middleware/auth';
 import { LoginAttemptService } from '../services/loginAttemptService';
 import { SessionService } from '../services/sessionService';
 
 const router = Router();
-
-// Firebase Auth REST API URL
-const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || 'AIzaSyAyyX8ZDCV6nBooeksTO54xvEFDboQzfQw';
-const FIREBASE_AUTH_URL = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`;
 
 /**
  * @swagger
@@ -259,10 +255,10 @@ router.post('/verify-token',
  * @swagger
  * /api/auth/login:
  *   post:
- *     summary: Connexion hybride (Firebase en ligne, PostgreSQL hors ligne)
+ *     summary: Connexion utilisateur (authentification locale PostgreSQL)
  *     description: |
- *       En mode en ligne: Vérifie avec Firebase Auth et synchronise vers PostgreSQL.
- *       En mode hors ligne: Vérifie directement dans PostgreSQL.
+ *       Authentifie l'utilisateur via la base de données PostgreSQL locale.
+ *       Les mots de passe sont vérifiés directement dans PostgreSQL.
  *     tags: [Authentification]
  *     requestBody:
  *       required: true
@@ -308,7 +304,6 @@ router.post('/login',
       const { email, password } = req.body;
       const ipAddress = req.ip || req.socket.remoteAddress;
       const userAgent = req.headers['user-agent'];
-      const isOnline = await hybridDataService.isFirebaseAvailable();
 
       // ===== Vérifier si l'utilisateur est bloqué de manière permanente =====
       const existingUser = await UserService.findByEmail(email);
@@ -346,135 +341,32 @@ router.post('/login',
         return;
       }
 
-      let user: any = null;
-      let firebaseUid: string | null = null;
-      let mode: 'firebase' | 'postgres' = 'postgres';
+      // ===== AUTHENTIFICATION LOCALE VIA POSTGRESQL =====
+      console.log('🔐 Authentification locale via PostgreSQL...');
 
-      if (isOnline) {
-        // ===== MODE EN LIGNE: Authentification via Firebase Auth REST API =====
-        console.log('🌐 Mode en ligne - Authentification via Firebase Auth...');
-
-        try {
-          // Appel à l'API REST de Firebase Auth (signInWithPassword)
-          const authResponse = await fetch(FIREBASE_AUTH_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email,
-              password,
-              returnSecureToken: true
-            })
-          });
-
-          const authData: any = await authResponse.json();
-
-          if (authResponse.ok && authData.localId) {
-            // Authentification Firebase réussie!
-            firebaseUid = authData.localId as string;
-            const idToken = authData.idToken as string;
-
-            console.log(`✅ Authentification Firebase Auth réussie: ${email} (${firebaseUid})`);
-
-            // Enregistrer la tentative réussie
-            await LoginAttemptService.recordAttempt(email, true, ipAddress);
-
-            // Récupérer le profil depuis Firestore
-            const db = getFirestore();
-            const userDoc = await db.collection('users').doc(firebaseUid!).get();
-
-            let firebaseUser: any;
-            if (userDoc.exists) {
-              firebaseUser = userDoc.data()!;
-
-              // Vérifier si bloqué
-              if (firebaseUser.est_bloque) {
-                res.status(403).json({
-                  success: false,
-                  error: 'Votre compte est bloqué. Contactez un administrateur.'
-                });
-                return;
-              }
-
-              // Mettre à jour le mot de passe dans Firestore si différent
-              if (firebaseUser.password !== password) {
-                await db.collection('users').doc(firebaseUid!).update({ password });
-              }
-            } else {
-              // Créer le profil Firestore s'il n'existe pas
-              firebaseUser = {
-                firebase_uid: firebaseUid,
-                email,
-                password,
-                display_name: authData.displayName || email.split('@')[0],
-                type_user: 2,
-                est_bloque: false,
-                date_creation: new Date()
-              };
-              await db.collection('users').doc(firebaseUid!).set(firebaseUser);
-              console.log(`✅ Profil Firestore créé pour: ${email}`);
-            }
-
-            // Synchroniser vers PostgreSQL (cache local)
-            user = await UserService.syncFromFirebase({
-              firebase_uid: firebaseUid || undefined,
-              email,
-              password, // Synchronise le mot de passe pour mode hors ligne
-              display_name: firebaseUser.display_name,
-              type_user: firebaseUser.type_user || 2
-            });
-
-            mode = 'firebase';
-          } else {
-            // Erreur d'authentification Firebase - NE PAS faire de fallback PostgreSQL
-            const errorMessage = authData.error?.message || 'Authentification échouée';
-            console.log(`❌ Firebase Auth erreur: ${errorMessage}`);
-
-            // Enregistrer la tentative échouée
-            await LoginAttemptService.recordAttempt(email, false, ipAddress, errorMessage);
-
-            // En mode en ligne, on fait confiance à Firebase Auth uniquement
-            res.status(401).json({
-              success: false,
-              error: 'Email ou mot de passe incorrect'
-            });
-            return;
-          }
-        } catch (firebaseError: any) {
-          // Erreur réseau/technique - on peut faire fallback vers PostgreSQL
-          console.warn('⚠️ Erreur connexion Firebase Auth, fallback vers PostgreSQL:', firebaseError.message);
-        }
-      }
-
-      // Mode hors ligne UNIQUEMENT - vérifier dans PostgreSQL
-      if (!user && !isOnline) {
-        console.log('📴 Mode hors ligne - Vérification dans PostgreSQL (cache local)...');
-        user = await UserService.verifyPassword(email, password);
-
-        if (user) {
-          console.log(`✅ Mot de passe vérifié dans PostgreSQL pour: ${email}`);
-          mode = 'postgres';
-
-          // Enregistrer la tentative réussie
-          await LoginAttemptService.recordAttempt(email, true, ipAddress);
-
-          // Vérifier si bloqué
-          if (user.est_bloque) {
-            res.status(403).json({
-              success: false,
-              error: 'Votre compte est bloqué. Contactez un administrateur.'
-            });
-            return;
-          }
-        } else {
-          // Enregistrer la tentative échouée (mode hors ligne)
-          await LoginAttemptService.recordAttempt(email, false, ipAddress, 'Invalid credentials (offline mode)');
-        }
-      }
+      const user = await UserService.verifyPassword(email, password);
 
       if (!user) {
+        // Enregistrer la tentative échouée
+        await LoginAttemptService.recordAttempt(email, false, ipAddress, 'Invalid credentials');
+
         res.status(401).json({
           success: false,
           error: 'Email ou mot de passe incorrect'
+        });
+        return;
+      }
+
+      console.log(`✅ Authentification réussie pour: ${email}`);
+
+      // Enregistrer la tentative réussie
+      await LoginAttemptService.recordAttempt(email, true, ipAddress);
+
+      // Vérifier si bloqué
+      if (user.est_bloque) {
+        res.status(403).json({
+          success: false,
+          error: 'Votre compte est bloqué. Contactez un administrateur.'
         });
         return;
       }
@@ -494,7 +386,6 @@ router.post('/login',
       res.status(200).json({
         success: true,
         message: 'Connexion réussie',
-        mode,
         user: {
           id: user.id_user,
           firebase_uid: user.firebase_uid,

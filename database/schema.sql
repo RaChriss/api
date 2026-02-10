@@ -1,8 +1,11 @@
+-- Active: 1770661939769@@127.0.0.1@5432@travaux_routiers@public
 -- ============================================
 -- SCHEMA BASE DE DONNEES COMPLET - PostgreSQL
 -- Projet: Gestion des Travaux Routiers
 -- Date: 2026-02-09
 -- ============================================
+
+
 
 BEGIN;
 
@@ -234,6 +237,17 @@ INSERT INTO
 VALUES (1, 'Nouveau', '#2196f3'),
     (2, 'En cours', '#ff9800'),
     (3, 'Terminé', '#4caf50') ON CONFLICT (Id_status) DO NOTHING;
+
+INSERT INTO user_ (firebase_uid, email, password, display_name, Id_type_user, est_bloque, date_creation, derniere_sync) 
+    VALUES (
+	'w1iEk6R25cWPQPUF8W23giXbu2E3',
+	'manager@gmail.com',
+	'manager123',
+	'Manager',
+	3,
+    false,
+    '2026-01-20 22:00:10.554459',
+    '2026-02-04 21:18:22.954008');
 
 -- Paramètres de sécurité
 INSERT INTO Parametre (nom, valeur, type, description) VALUES 
