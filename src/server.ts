@@ -14,6 +14,9 @@ import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
 import signalementRoutes from './routes/signalements';
 import usersRoutes from './routes/users';
+import configRoutes from './routes/config';
+import photosRoutes from './routes/photos';
+import reparationsRoutes from './routes/reparations';
 
 // Load environment variables
 dotenv.config();
@@ -181,6 +184,15 @@ app.use('/api/firebase', firebaseRoutes);
 
 // Signalements routes
 app.use('/api/signalements', signalementRoutes);
+
+// Configuration routes (prix, statistiques)
+app.use('/api/config', configRoutes);
+
+// Photos routes
+app.use('/api/photos', photosRoutes);
+
+// Réparations routes
+app.use('/api/reparations', reparationsRoutes);
 
 // ============================================
 // Error handling middleware

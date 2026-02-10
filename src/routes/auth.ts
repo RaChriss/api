@@ -3,6 +3,7 @@ import { body, validationResult } from 'express-validator';
 import UserService from '../services/userService';
 import { hybridDataService } from '../services/hybridDataService';
 import { getFirestore } from '../config/firebase';
+import { getAuth } from 'firebase-admin/auth';
 import { getUserTypeName } from '../utils/userTypes';
 import { authMiddleware } from '../middleware/auth';
 import { LoginAttemptService } from '../services/loginAttemptService';

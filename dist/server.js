@@ -18,6 +18,9 @@ const auth_1 = __importDefault(require("./routes/auth"));
 const admin_1 = __importDefault(require("./routes/admin"));
 const signalements_1 = __importDefault(require("./routes/signalements"));
 const users_1 = __importDefault(require("./routes/users"));
+const config_1 = __importDefault(require("./routes/config"));
+const photos_1 = __importDefault(require("./routes/photos"));
+const reparations_1 = __importDefault(require("./routes/reparations"));
 // Load environment variables
 dotenv_1.default.config();
 // Initialize Firebase
@@ -164,6 +167,12 @@ app.use('/api/admin', admin_1.default);
 app.use('/api/firebase', firebase_2.default);
 // Signalements routes
 app.use('/api/signalements', signalements_1.default);
+// Configuration routes (prix, statistiques)
+app.use('/api/config', config_1.default);
+// Photos routes
+app.use('/api/photos', photos_1.default);
+// Réparations routes
+app.use('/api/reparations', reparations_1.default);
 app.use((err, req, res, next) => {
     console.error('Error:', err);
     const status = err.status || 500;

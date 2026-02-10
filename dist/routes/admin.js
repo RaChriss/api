@@ -729,6 +729,86 @@ router.post('/sync/auto', auth_1.authMiddleware, auth_1.managerMiddleware, async
 });
 /**
  * @swagger
+ * /api/admin/sync/statistics:
+ *   get:
+ *     summary: Obtenir les statistiques de synchronisation
+ *     tags: [Administration, Synchronisation]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: days
+ *         schema:
+ *           type: integer
+ *           default: 7
+ *         description: Nombre de jours à analyser
+ *     responses:
+ *       200:
+ *         description: Statistiques de synchronisation
+ */
+router.get('/sync/statistics', auth_1.authMiddleware, auth_1.managerMiddleware, async (req, res) => {
+    try {
+        const days = parseInt(req.query.days) || 7;
+        const pool = require('../config/database').default;
+        // Statistiques par table
+        const tableStatsQuery = `
+      SELECT 
+        table_name,
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) as success,
+        SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'CONFLICT' THEN 1 ELSE 0 END) as conflicts
+      FROM SyncLog
+      WHERE sync_date >= CURRENT_TIMESTAMP - ($1 || ' days')::INTERVAL
+      GROUP BY table_name
+      ORDER BY total DESC
+    `;
+        // Statistiques par jour
+        const dailyStatsQuery = `
+      SELECT 
+        DATE(sync_date) as date,
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) as success,
+        SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed
+      FROM SyncLog
+      WHERE sync_date >= CURRENT_TIMESTAMP - ($1 || ' days')::INTERVAL
+      GROUP BY DATE(sync_date)
+      ORDER BY date DESC
+    `;
+        // Statistiques globales
+        const globalStatsQuery = `
+      SELECT 
+        COUNT(*) as total_syncs,
+        SUM(CASE WHEN status = 'SUCCESS' THEN 1 ELSE 0 END) as total_success,
+        SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as total_failed,
+        SUM(CASE WHEN status = 'CONFLICT' THEN 1 ELSE 0 END) as total_conflicts,
+        MAX(sync_date) as last_sync
+      FROM SyncLog
+      WHERE sync_date >= CURRENT_TIMESTAMP - ($1 || ' days')::INTERVAL
+    `;
+        const [tableStats, dailyStats, globalStats] = await Promise.all([
+            pool.query(tableStatsQuery, [days]),
+            pool.query(dailyStatsQuery, [days]),
+            pool.query(globalStatsQuery, [days])
+        ]);
+        res.status(200).json({
+            success: true,
+            period_days: days,
+            global: globalStats.rows[0] || { total_syncs: 0, total_success: 0, total_failed: 0, total_conflicts: 0 },
+            by_table: tableStats.rows,
+            by_day: dailyStats.rows
+        });
+    }
+    catch (error) {
+        console.error('Erreur récupération statistiques sync:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Erreur serveur'
+        });
+    }
+});
+/**
+ * @swagger
  * /api/admin/sync/conflicts:
  *   get:
  *     summary: Obtenir la liste des conflits de synchronisation

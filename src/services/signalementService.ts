@@ -17,6 +17,7 @@ export interface Signalement {
     id_signalement: number;
     location: SignalementLocation | null;
     description?: string;
+    niveau?: number | null;
     date_signalement: Date;
     firebase_id?: string;
     est_synchronise: boolean;
@@ -60,6 +61,87 @@ export interface SignalementWithDetails extends Signalement {
 // ============================================
 
 export class SignalementService {
+
+    /**
+     * Synchronise un signalement vers Firebase
+     */
+    static async syncToFirebase(signalementId: number): Promise<boolean> {
+        const isOnline = await hybridDataService.isFirebaseAvailable();
+        if (!isOnline) {
+            console.log('💾 Mode hors ligne : signalement mis à jour localement (à synchroniser)');
+            return false;
+        }
+
+        try {
+            const db = getFirestore();
+
+            // Récupérer les données complètes du signalement
+            const result = await query(`
+                SELECT 
+                    s.id_signalement, s.firebase_id,
+                    ST_X(s.location) as longitude, ST_Y(s.location) as latitude,
+                    s.description, s.date_signalement,
+                    u.id_user, u.display_name, u.email, u.firebase_uid,
+                    st.id_status, st.libelle as status_libelle, st.couleur as status_couleur
+                FROM Signalement s
+                JOIN User_ u ON s.id_user = u.id_user
+                JOIN Status st ON s.id_status = st.id_status
+                WHERE s.id_signalement = $1
+            `, [signalementId]);
+
+            if (result.rows.length === 0) {
+                console.warn(`⚠️ Signalement ${signalementId} non trouvé`);
+                return false;
+            }
+
+            const row = result.rows[0];
+            const firebaseId = row.firebase_id || row.id_signalement.toString();
+            const docRef = db.collection('signalements').doc(firebaseId);
+
+            const signalementData = {
+                postgres_id: row.id_signalement,
+                location: new admin.firestore.GeoPoint(row.latitude || 0, row.longitude || 0),
+                description: row.description,
+                date_signalement: row.date_signalement,
+                updated_at: admin.firestore.FieldValue.serverTimestamp(),
+                firebase_uid: row.firebase_uid,
+                user: {
+                    id_user: row.id_user,
+                    display_name: row.display_name,
+                    email: row.email
+                },
+                status: {
+                    id_status: row.id_status,
+                    libelle: row.status_libelle,
+                    couleur: row.status_couleur
+                },
+                sync_version: admin.firestore.FieldValue.increment(1)
+            };
+
+            const docSnap = await docRef.get();
+            if (docSnap.exists) {
+                await docRef.update(signalementData);
+                console.log(`✅ Signalement ${signalementId} mis à jour dans Firebase (doc: ${firebaseId})`);
+            } else {
+                await docRef.set({
+                    ...signalementData,
+                    created_at: admin.firestore.FieldValue.serverTimestamp()
+                });
+                console.log(`✅ Signalement ${signalementId} créé dans Firebase (doc: ${firebaseId})`);
+            }
+
+            // Mettre à jour le firebase_id si nécessaire et marquer comme synchronisé
+            await query(
+                'UPDATE Signalement SET firebase_id = $1, est_synchronise = TRUE, derniere_sync = CURRENT_TIMESTAMP WHERE id_signalement = $2',
+                [firebaseId, signalementId]
+            );
+
+            return true;
+        } catch (error) {
+            console.warn('⚠️ Erreur sync signalement Firebase:', (error as Error).message);
+            return false;
+        }
+    }
 
     /**
      * Crée un nouveau signalement
@@ -146,6 +228,7 @@ export class SignalementService {
                 ST_X(s.location) as longitude,
                 ST_Y(s.location) as latitude,
                 s.description,
+                s.niveau,
                 s.date_signalement,
                 s.firebase_id,
                 s.est_synchronise,
@@ -208,6 +291,7 @@ export class SignalementService {
                 ST_X(s.location) as longitude,
                 ST_Y(s.location) as latitude,
                 s.description,
+                s.niveau,
                 s.date_signalement,
                 s.firebase_id,
                 s.est_synchronise,
@@ -297,7 +381,12 @@ export class SignalementService {
             values
         );
 
-        return this.mapRowToSignalement(result.rows[0]);
+        const signalement = this.mapRowToSignalement(result.rows[0]);
+
+        // Synchroniser vers Firebase
+        await this.syncToFirebase(id);
+
+        return signalement;
     }
 
     /**
@@ -407,6 +496,7 @@ export class SignalementService {
                 longitude: parseFloat(row.longitude)
             } : null,
             description: row.description,
+            niveau: row.niveau || null,
             date_signalement: row.date_signalement,
             firebase_id: row.firebase_id,
             est_synchronise: row.est_synchronise,

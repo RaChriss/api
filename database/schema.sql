@@ -1,4 +1,4 @@
--- Active: 1770661939769@@127.0.0.1@5432@travaux_routiers@public
+-- Active: 1770716084209@@127.0.0.1@5432@travaux_routiers@public
 -- ============================================
 -- SCHEMA BASE DE DONNEES COMPLET - PostgreSQL
 -- Projet: Gestion des Travaux Routiers
@@ -17,7 +17,17 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 -- ============================================
 -- SUPPRESSION DES TABLES EXISTANTES
 -- ============================================
+DROP TABLE IF EXISTS SyncLog CASCADE;
+
+DROP TABLE IF EXISTS HistoriqueStatus CASCADE;
+
+DROP TABLE IF EXISTS Photo CASCADE;
+
 DROP TABLE IF EXISTS Reparation CASCADE;
+
+DROP TABLE IF EXISTS HistoriquePrix CASCADE;
+
+DROP TABLE IF EXISTS PrixConfig CASCADE;
 
 DROP TABLE IF EXISTS Signalement CASCADE;
 
@@ -161,6 +171,7 @@ CREATE TABLE Signalement (
     Id_signalement SERIAL PRIMARY KEY,
     location GEOMETRY (Point, 4326),
     description VARCHAR(500),
+    niveau INT DEFAULT NULL CHECK (niveau IS NULL OR (niveau >= 1 AND niveau <= 10)),
     date_signalement TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     firebase_id VARCHAR(128),
     est_synchronise BOOLEAN DEFAULT FALSE,
@@ -185,18 +196,60 @@ CREATE INDEX idx_signalement_sync ON Signalement (est_synchronise);
 CREATE INDEX idx_signalement_location ON Signalement USING GIST (location);
 
 -- ============================================
+-- TABLE: PrixConfig
+-- Configuration des prix par m² (valeur actuelle)
+-- ============================================
+CREATE TABLE PrixConfig (
+    Id_prix_config SERIAL PRIMARY KEY,
+    prix_par_m2 DECIMAL(15, 2) NOT NULL,
+    description VARCHAR(255),
+    date_effet TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    est_actif BOOLEAN DEFAULT TRUE,
+    cree_par INT,
+    FOREIGN KEY (cree_par) REFERENCES User_ (Id_user)
+);
+
+CREATE INDEX idx_prixconfig_actif ON PrixConfig (est_actif);
+CREATE INDEX idx_prixconfig_date ON PrixConfig (date_effet);
+
+-- ============================================
+-- TABLE: HistoriquePrix
+-- Historique des prix appliqués aux réparations
+-- Pour traçabilité - le prix ne change pas après création
+-- ============================================
+CREATE TABLE HistoriquePrix (
+    Id_historique_prix SERIAL PRIMARY KEY,
+    prix_par_m2 DECIMAL(15, 2) NOT NULL,
+    niveau INT NOT NULL CHECK (niveau >= 1 AND niveau <= 10),
+    surface_m2 DECIMAL(10, 2) NOT NULL,
+    budget_calcule DECIMAL(15, 2) NOT NULL,
+    date_application TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    Id_prix_config INT,
+    FOREIGN KEY (Id_prix_config) REFERENCES PrixConfig (Id_prix_config)
+);
+
+CREATE INDEX idx_historiqueprix_date ON HistoriquePrix (date_application);
+
+-- ============================================
 -- TABLE: Reparation
 -- Réparations planifiées par les managers
+-- Budget calculé : prix_par_m2 * signalement.niveau * surface_m2
+-- Le niveau est sur le signalement, pas sur la réparation
+-- Avancement: nouveau=0%, en_cours=50%, termine=100%
 -- ============================================
 CREATE TABLE Reparation (
     Id_reparation SERIAL PRIMARY KEY,
     surface_m2 DECIMAL(10, 2) NOT NULL,
     budget DECIMAL(15, 2) NOT NULL,
+    avancement_pct INT DEFAULT 0 CHECK (avancement_pct >= 0 AND avancement_pct <= 100),
+    -- Dates d'étapes d'avancement
+    date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     date_debut DATE,
+    date_passage_en_cours TIMESTAMP,
     date_fin_prevue DATE,
     date_fin_reelle DATE,
+    date_termine TIMESTAMP,
     commentaire TEXT,
-    date_creation TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     firebase_id VARCHAR(128),
     est_synchronise BOOLEAN DEFAULT FALSE,
     derniere_sync TIMESTAMP,
@@ -204,10 +257,12 @@ CREATE TABLE Reparation (
     Id_entreprise INT,
     Id_status INT NOT NULL DEFAULT 1,
     Id_user INT,
+    Id_historique_prix INT,
     FOREIGN KEY (Id_signalement) REFERENCES Signalement (Id_signalement) ON DELETE CASCADE,
     FOREIGN KEY (Id_entreprise) REFERENCES Entreprise (Id_entreprise),
     FOREIGN KEY (Id_status) REFERENCES Status (Id_status),
-    FOREIGN KEY (Id_user) REFERENCES User_ (Id_user)
+    FOREIGN KEY (Id_user) REFERENCES User_ (Id_user),
+    FOREIGN KEY (Id_historique_prix) REFERENCES HistoriquePrix (Id_historique_prix)
 );
 
 CREATE INDEX idx_reparation_signalement ON Reparation (Id_signalement);
@@ -219,6 +274,74 @@ CREATE INDEX idx_reparation_status ON Reparation (Id_status);
 CREATE INDEX idx_reparation_firebase_id ON Reparation (firebase_id);
 
 CREATE INDEX idx_reparation_sync ON Reparation (est_synchronise);
+
+-- ============================================
+-- TABLE: HistoriqueStatus
+-- Historique des changements de statut des réparations
+-- ============================================
+CREATE TABLE HistoriqueStatus (
+    Id_historique SERIAL PRIMARY KEY,
+    Id_reparation INT NOT NULL,
+    Id_status_ancien INT,
+    Id_status_nouveau INT NOT NULL,
+    Id_user INT,
+    date_modification TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    commentaire TEXT,
+    FOREIGN KEY (Id_reparation) REFERENCES Reparation (Id_reparation) ON DELETE CASCADE,
+    FOREIGN KEY (Id_status_ancien) REFERENCES Status (Id_status),
+    FOREIGN KEY (Id_status_nouveau) REFERENCES Status (Id_status),
+    FOREIGN KEY (Id_user) REFERENCES User_ (Id_user)
+);
+
+CREATE INDEX idx_historique_reparation ON HistoriqueStatus (Id_reparation);
+CREATE INDEX idx_historique_date ON HistoriqueStatus (date_modification);
+
+-- ============================================
+-- TABLE: SyncLog
+-- Journal de synchronisation Firebase <-> PostgreSQL
+-- ============================================
+CREATE TABLE SyncLog (
+    Id_SyncLog SERIAL PRIMARY KEY,
+    table_name VARCHAR(50) NOT NULL,
+    record_id VARCHAR(128) NOT NULL,
+    firebase_id VARCHAR(128),
+    operation VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    error_message TEXT,
+    sync_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    direction VARCHAR(20) DEFAULT 'PG_TO_FIREBASE',
+    CONSTRAINT chk_operation CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE', 'SYNC')),
+    CONSTRAINT chk_status CHECK (status IN ('PENDING', 'SUCCESS', 'FAILED', 'CONFLICT')),
+    CONSTRAINT chk_direction CHECK (direction IN ('PG_TO_FIREBASE', 'FIREBASE_TO_PG', 'BIDIRECTIONAL'))
+);
+
+CREATE INDEX idx_synclog_table ON SyncLog (table_name);
+CREATE INDEX idx_synclog_status ON SyncLog (status);
+CREATE INDEX idx_synclog_date ON SyncLog (sync_date);
+
+-- ============================================
+-- TABLE: Photo
+-- Photos des signalements stockées sur Cloudinary
+-- ============================================
+CREATE TABLE Photo (
+    Id_photo SERIAL PRIMARY KEY,
+    Id_signalement INT NOT NULL,
+    url VARCHAR(500) NOT NULL,
+    cloudinary_public_id VARCHAR(255),
+    file_name VARCHAR(255),
+    path VARCHAR(500),
+    mime_type VARCHAR(50) DEFAULT 'image/jpeg',
+    taille_octets INT,
+    largeur INT,
+    hauteur INT,
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    firebase_id VARCHAR(128),
+    est_synchronise BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (Id_signalement) REFERENCES Signalement (Id_signalement) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_photo_signalement ON Photo (Id_signalement);
+CREATE INDEX idx_photo_cloudinary ON Photo (cloudinary_public_id);
 
 -- ============================================
 -- DONNEES PAR DEFAUT
@@ -255,10 +378,16 @@ INSERT INTO Parametre (nom, valeur, type, description) VALUES
     ('duree_blocage_minutes', '30', 'number', 'Durée du blocage temporaire en minutes'),
     ('session_expiration_heures', '24', 'number', 'Durée de validité d''une session en heures'),
     ('activer_blocage_auto', 'true', 'boolean', 'Activer le blocage automatique après échecs'),
-    ('sync_interval_minutes', '5', 'number', 'Intervalle de synchronisation Firebase en minutes')
+    ('sync_interval_minutes', '5', 'number', 'Intervalle de synchronisation Firebase en minutes'),
+    ('prix_par_m2', '50000', 'number', 'Prix forfaitaire par mètre carré en Ariary')
 ON CONFLICT (nom) DO UPDATE SET
     valeur = EXCLUDED.valeur,
     date_modification = CURRENT_TIMESTAMP;
+
+-- Prix par défaut
+INSERT INTO PrixConfig (prix_par_m2, description, est_actif, cree_par)
+VALUES (50000, 'Prix forfaitaire initial par m²', TRUE, 1)
+ON CONFLICT DO NOTHING;
 
 -- ============================================
 -- VUES UTILES

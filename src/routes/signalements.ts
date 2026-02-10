@@ -11,6 +11,88 @@ import * as admin from 'firebase-admin';
 const router = Router();
 
 // ============================================
+// HELPER: Sync Signalement to Firebase
+// ============================================
+
+async function syncSignalementToFirebase(signalementId: number): Promise<boolean> {
+    const isOnline = await hybridDataService.isFirebaseAvailable();
+    if (!isOnline) {
+        console.log('💾 Mode hors ligne : signalement mis à jour localement (à synchroniser)');
+        return false;
+    }
+
+    try {
+        const db = getFirestore();
+
+        // Récupérer les données complètes du signalement
+        const result = await pool.query(`
+            SELECT 
+                s.id_signalement, s.firebase_id,
+                ST_X(s.location) as longitude, ST_Y(s.location) as latitude,
+                s.description, s.date_signalement,
+                u.id_user, u.display_name, u.email, u.firebase_uid,
+                st.id_status, st.libelle as status_libelle, st.couleur as status_couleur
+            FROM Signalement s
+            JOIN User_ u ON s.id_user = u.id_user
+            JOIN Status st ON s.id_status = st.id_status
+            WHERE s.id_signalement = $1
+        `, [signalementId]);
+
+        if (result.rows.length === 0) {
+            console.warn(`⚠️ Signalement ${signalementId} non trouvé`);
+            return false;
+        }
+
+        const row = result.rows[0];
+        const firebaseId = row.firebase_id || row.id_signalement.toString();
+        const docRef = db.collection('signalements').doc(firebaseId);
+
+        const signalementData = {
+            postgres_id: row.id_signalement,
+            location: new admin.firestore.GeoPoint(row.latitude || 0, row.longitude || 0),
+            description: row.description,
+            date_signalement: row.date_signalement,
+            updated_at: admin.firestore.FieldValue.serverTimestamp(),
+            firebase_uid: row.firebase_uid,
+            user: {
+                id_user: row.id_user,
+                display_name: row.display_name,
+                email: row.email
+            },
+            status: {
+                id_status: row.id_status,
+                libelle: row.status_libelle,
+                couleur: row.status_couleur
+            },
+            sync_version: admin.firestore.FieldValue.increment(1)
+        };
+
+        const docSnap = await docRef.get();
+        if (docSnap.exists) {
+            await docRef.update(signalementData);
+            console.log(`✅ Signalement ${signalementId} mis à jour dans Firebase (doc: ${firebaseId})`);
+        } else {
+            await docRef.set({
+                ...signalementData,
+                created_at: admin.firestore.FieldValue.serverTimestamp()
+            });
+            console.log(`✅ Signalement ${signalementId} créé dans Firebase (doc: ${firebaseId})`);
+        }
+
+        // Mettre à jour le firebase_id si nécessaire et marquer comme synchronisé
+        await pool.query(
+            'UPDATE Signalement SET firebase_id = $1, est_synchronise = TRUE, derniere_sync = CURRENT_TIMESTAMP WHERE id_signalement = $2',
+            [firebaseId, signalementId]
+        );
+
+        return true;
+    } catch (error) {
+        console.warn('⚠️ Erreur sync signalement Firebase:', (error as Error).message);
+        return false;
+    }
+}
+
+// ============================================
 // HELPER: Sync Reparation to Firebase
 // ============================================
 
@@ -171,6 +253,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
                 id: s.id_signalement,
                 description: s.description,
                 location: s.location,
+                niveau: s.niveau || null,
                 date_signalement: s.date_signalement,
                 status: {
                     libelle: s.status_libelle,
@@ -315,6 +398,7 @@ router.get('/user/mes-signalements', authMiddleware, async (req: Request, res: R
                 id: s.id_signalement,
                 description: s.description,
                 location: s.location,
+                niveau: s.niveau || null,
                 date_signalement: s.date_signalement,
                 firebase_id: s.firebase_id,
                 est_synchronise: s.est_synchronise,
@@ -489,6 +573,158 @@ router.post('/manager/sync', authMiddleware, managerMiddleware, async (req: Requ
     }
 });
 
+// ============================================
+// POPUP / MARKER INFO (pour survol carte)
+// ============================================
+
+/**
+ * @swagger
+ * /api/signalements/{id}/popup:
+ *   get:
+ *     summary: Informations pour popup/marker sur la carte
+ *     description: Retourne les informations essentielles pour afficher au survol d'un point sur la carte
+ *     tags: [Signalements - Visiteur]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID du signalement
+ *     responses:
+ *       200:
+ *         description: Informations du popup
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     date_signalement:
+ *                       type: string
+ *                       format: date-time
+ *                     status:
+ *                       type: object
+ *                     surface_m2:
+ *                       type: number
+ *                     budget:
+ *                       type: number
+ *                     niveau:
+ *                       type: integer
+ *                     entreprise:
+ *                       type: object
+ *                     photos_url:
+ *                       type: string
+ *                     photos_count:
+ *                       type: integer
+ *       404:
+ *         description: Signalement non trouvé
+ */
+router.get('/:id/popup', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const id = parseInt(req.params.id, 10);
+
+        if (isNaN(id)) {
+            res.status(400).json({ success: false, error: 'ID invalide' });
+            return;
+        }
+
+        // Requête optimisée pour récupérer toutes les infos nécessaires au popup
+        const result = await pool.query(`
+            SELECT 
+                s.id_signalement,
+                s.description,
+                s.date_signalement,
+                s.niveau,
+                ST_X(s.location) as longitude,
+                ST_Y(s.location) as latitude,
+                -- Status
+                st.id_status,
+                st.libelle as status_libelle,
+                st.couleur as status_couleur,
+                -- Réparation
+                r.id_reparation,
+                r.surface_m2,
+                r.budget,
+                r.avancement_pct,
+                r.date_creation as date_creation_reparation,
+                r.date_passage_en_cours,
+                r.date_termine,
+                -- Entreprise
+                e.id_entreprise,
+                e.nom as entreprise_nom,
+                e.telephone as entreprise_telephone,
+                e.email as entreprise_email,
+                -- Nombre de photos
+                (SELECT COUNT(*) FROM Photo p WHERE p.id_signalement = s.id_signalement) as photos_count
+            FROM Signalement s
+            JOIN Status st ON s.id_status = st.id_status
+            LEFT JOIN Reparation r ON s.id_signalement = r.id_signalement
+            LEFT JOIN Entreprise e ON r.id_entreprise = e.id_entreprise
+            WHERE s.id_signalement = $1
+        `, [id]);
+
+        if (result.rows.length === 0) {
+            res.status(404).json({ success: false, error: 'Signalement non trouvé' });
+            return;
+        }
+
+        const row = result.rows[0];
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                id: row.id_signalement,
+                description: row.description,
+                date_signalement: row.date_signalement,
+                niveau: row.niveau || null,
+                location: {
+                    latitude: row.latitude,
+                    longitude: row.longitude
+                },
+                // Status du signalement
+                status: {
+                    id: row.id_status,
+                    libelle: row.status_libelle,
+                    couleur: row.status_couleur
+                },
+                // Infos réparation (si existe)
+                reparation: row.id_reparation ? {
+                    id: row.id_reparation,
+                    surface_m2: parseFloat(row.surface_m2) || 0,
+                    budget: parseFloat(row.budget) || 0,
+                    avancement_pct: row.avancement_pct || 0,
+                    date_creation: row.date_creation_reparation,
+                    date_passage_en_cours: row.date_passage_en_cours,
+                    date_termine: row.date_termine
+                } : null,
+                // Entreprise concernée
+                entreprise: row.id_entreprise ? {
+                    id: row.id_entreprise,
+                    nom: row.entreprise_nom,
+                    telephone: row.entreprise_telephone,
+                    email: row.entreprise_email
+                } : null,
+                // Photos
+                photos: {
+                    count: parseInt(row.photos_count) || 0,
+                    url: `${baseUrl}/api/photos/signalement/${row.id_signalement}`
+                }
+            }
+        });
+    } catch (error: any) {
+        console.error('Erreur récupération popup signalement:', error);
+        res.status(500).json({ success: false, error: 'Erreur serveur' });
+    }
+});
+
 /**
  * @swagger
  * /api/signalements/{id}:
@@ -530,6 +766,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
                 id: signalement.id_signalement,
                 description: signalement.description,
                 location: signalement.location,
+                niveau: signalement.niveau || null,
                 date_signalement: signalement.date_signalement,
                 firebase_id: signalement.firebase_id,
                 est_synchronise: signalement.est_synchronise,
@@ -885,8 +1122,7 @@ router.post('/:id/reparation',
     managerMiddleware,
     [
         param('id').isInt({ min: 1 }).withMessage('ID signalement invalide'),
-        body('surface_m2').optional().isFloat({ min: 0 }).withMessage('Surface invalide'),
-        body('budget').optional().isFloat({ min: 0 }).withMessage('Budget invalide'),
+        body('surface_m2').isFloat({ min: 0.01 }).withMessage('Surface m² requise et doit être > 0'),
         body('id_entreprise').optional().isInt({ min: 1 }).withMessage('ID entreprise invalide'),
         body('date_debut').optional().isISO8601().withMessage('Date début invalide'),
         body('date_fin_prevue').optional().isISO8601().withMessage('Date fin prévue invalide'),
@@ -904,14 +1140,26 @@ router.post('/:id/reparation',
             }
 
             const signalementId = parseInt(req.params.id, 10);
-            const { surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire } = req.body;
+            const { surface_m2, id_entreprise, date_debut, date_fin_prevue, commentaire } = req.body;
             const managerId = req.user?.id;
 
-            // Vérifier que le signalement existe
-            const signalement = await SignalementService.findById(signalementId);
+            // Vérifier que le signalement existe et récupérer son niveau
+            const signalementResult = await pool.query(
+                'SELECT id_signalement, niveau FROM Signalement WHERE id_signalement = $1',
+                [signalementId]
+            );
 
-            if (!signalement) {
+            if (signalementResult.rows.length === 0) {
                 res.status(404).json({ success: false, error: 'Signalement non trouvé' });
+                return;
+            }
+
+            const niveau = signalementResult.rows[0].niveau;
+            if (!niveau) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Le signalement n\'a pas de niveau défini. Veuillez d\'abord attribuer un niveau au signalement via PUT /api/signalements/:id/status'
+                });
                 return;
             }
 
@@ -921,64 +1169,267 @@ router.post('/:id/reparation',
                 [signalementId]
             );
 
+            // Récupérer le prix actif pour calculer le budget
+            const prixResult = await pool.query(
+                'SELECT Id_prix_config, prix_par_m2 FROM PrixConfig WHERE est_actif = TRUE ORDER BY date_effet DESC LIMIT 1'
+            );
+
+            let prix_par_m2 = 0;
+            let id_prix_config = null;
+            if (prixResult.rows.length > 0) {
+                prix_par_m2 = parseFloat(prixResult.rows[0].prix_par_m2);
+                id_prix_config = prixResult.rows[0].id_prix_config;
+            }
+
+            if (prix_par_m2 === 0) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Aucun prix par m² configuré. Veuillez configurer un prix via /api/config/prix'
+                });
+                return;
+            }
+
+            const budget = prix_par_m2 * niveau * surface_m2;
+
+            // Créer l'historique de prix pour traçabilité
+            const historiqueResult = await pool.query(`
+                INSERT INTO HistoriquePrix (prix_par_m2, niveau, surface_m2, budget_calcule, id_prix_config)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING Id_historique_prix
+            `, [prix_par_m2, niveau, surface_m2, budget, id_prix_config]);
+            const id_historique_prix = historiqueResult.rows[0].id_historique_prix;
+
             let result;
 
             if (existingResult.rows.length > 0) {
-                // Mise à jour - marquer comme non synchronisé
+                // Mise à jour de la réparation existante
                 result = await pool.query(`
-          UPDATE Reparation 
-          SET surface_m2 = COALESCE($1, surface_m2),
-              budget = COALESCE($2, budget),
-              id_entreprise = COALESCE($3, id_entreprise),
-              date_debut = COALESCE($4, date_debut),
-              date_fin_prevue = COALESCE($5, date_fin_prevue),
-              commentaire = COALESCE($6, commentaire),
-              date_modification = CURRENT_TIMESTAMP,
-              est_synchronise = FALSE
-          WHERE id_signalement = $7
-          RETURNING *
-        `, [surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, signalementId]);
+                    UPDATE Reparation 
+                    SET surface_m2 = $1,
+                        budget = $2,
+                        id_entreprise = COALESCE($3, id_entreprise),
+                        date_debut = COALESCE($4, date_debut),
+                        date_fin_prevue = COALESCE($5, date_fin_prevue),
+                        commentaire = COALESCE($6, commentaire),
+                        Id_historique_prix = $7,
+                        est_synchronise = FALSE
+                    WHERE id_signalement = $8
+                    RETURNING *
+                `, [surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, id_historique_prix, signalementId]);
 
-                // Marquer le signalement comme non synchronisé aussi
                 await pool.query(
                     'UPDATE Signalement SET est_synchronise = FALSE WHERE id_signalement = $1',
                     [signalementId]
                 );
 
-                // Tenter de synchroniser avec Firebase
                 await syncReparationToFirebase(result.rows[0], signalementId);
+                await syncSignalementToFirebase(signalementId);
 
                 res.status(200).json({
                     success: true,
                     message: 'Réparation mise à jour',
-                    reparation: result.rows[0]
+                    reparation: result.rows[0],
+                    calcul: {
+                        formule: `${prix_par_m2} Ar × ${niveau} × ${surface_m2} m²`,
+                        prix_par_m2,
+                        niveau,
+                        surface_m2,
+                        budget: Math.round(budget * 100) / 100
+                    }
                 });
             } else {
-                // Création - statut "En cours" par défaut (id = 2), non synchronisé
+                // Création avec statut "En cours" (id = 2) et avancement 50%
                 result = await pool.query(`
-          INSERT INTO Reparation 
-          (surface_m2, budget, id_entreprise, date_debut, date_fin_prevue, commentaire, id_signalement, id_status, id_user, est_synchronise)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, 2, $8, FALSE)
-          RETURNING *
-        `, [surface_m2 || 0, budget || 0, id_entreprise || 1, date_debut, date_fin_prevue, commentaire, signalementId, managerId]);
+                    INSERT INTO Reparation 
+                    (surface_m2, budget, avancement_pct, date_passage_en_cours,
+                     id_entreprise, date_debut, date_fin_prevue, commentaire,
+                     id_signalement, id_status, id_user, Id_historique_prix, est_synchronise)
+                    VALUES ($1, $2, 50, CURRENT_TIMESTAMP, $3, $4, $5, $6, $7, 2, $8, $9, FALSE)
+                    RETURNING *
+                `, [surface_m2, budget, id_entreprise || null, date_debut, date_fin_prevue, commentaire, signalementId, managerId, id_historique_prix]);
 
-                // Mettre à jour le statut du signalement à "En cours" et marquer non synchronisé
+                // Mettre à jour le statut du signalement à "En cours"
                 await pool.query(
                     'UPDATE Signalement SET id_status = 2, est_synchronise = FALSE WHERE id_signalement = $1',
                     [signalementId]
                 );
 
-                // Synchroniser avec Firebase
                 await syncReparationToFirebase(result.rows[0], signalementId);
+                await syncSignalementToFirebase(signalementId);
 
                 res.status(201).json({
                     success: true,
-                    message: 'Réparation créée',
-                    reparation: result.rows[0]
+                    message: 'Réparation créée avec budget calculé automatiquement',
+                    reparation: result.rows[0],
+                    calcul: {
+                        formule: `${prix_par_m2} Ar × ${niveau} × ${surface_m2} m²`,
+                        prix_par_m2,
+                        niveau,
+                        surface_m2,
+                        budget: Math.round(budget * 100) / 100
+                    }
                 });
             }
         } catch (error: any) {
             console.error('Erreur gestion réparation:', error);
+            res.status(500).json({ success: false, error: 'Erreur serveur' });
+        }
+    }
+);
+
+/**
+ * @swagger
+ * /api/signalements/{id}/niveau:
+ *   put:
+ *     summary: Mettre à jour le niveau de dégradation d'un signalement
+ *     tags: [Signalements - Manager]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID du signalement
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - niveau
+ *             properties:
+ *               niveau:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 10
+ *                 example: 5
+ *                 description: "Niveau de dégradation (1=faible, 10=critique)"
+ *     responses:
+ *       200:
+ *         description: Niveau mis à jour avec succès
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 signalement:
+ *                   type: object
+ *                   properties:
+ *                     id_signalement:
+ *                       type: integer
+ *                     niveau:
+ *                       type: integer
+ *                     ancien_niveau:
+ *                       type: integer
+ *                       nullable: true
+ *       400:
+ *         description: Niveau invalide
+ *       404:
+ *         description: Signalement non trouvé
+ */
+router.put('/:id/niveau',
+    authMiddleware,
+    managerMiddleware,
+    [
+        param('id').isInt({ min: 1 }).withMessage('ID signalement invalide'),
+        body('niveau').isInt({ min: 1, max: 10 }).withMessage('Le niveau doit être un entier entre 1 et 10')
+    ],
+    async (req: Request, res: Response): Promise<void> => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                res.status(400).json({
+                    success: false,
+                    errors: errors.array()
+                });
+                return;
+            }
+
+            const signalementId = parseInt(req.params.id, 10);
+            const { niveau } = req.body;
+
+            // Vérifier que le signalement existe et récupérer l'ancien niveau
+            const oldResult = await pool.query(
+                'SELECT id_signalement, niveau FROM Signalement WHERE id_signalement = $1',
+                [signalementId]
+            );
+
+            if (oldResult.rows.length === 0) {
+                res.status(404).json({ success: false, error: 'Signalement non trouvé' });
+                return;
+            }
+
+            const ancienNiveau = oldResult.rows[0].niveau;
+
+            // Mettre à jour le niveau
+            await pool.query(
+                'UPDATE Signalement SET niveau = $1, est_synchronise = FALSE WHERE id_signalement = $2',
+                [niveau, signalementId]
+            );
+
+            // Si une réparation existe, recalculer le budget avec le nouveau niveau
+            const reparationResult = await pool.query(
+                'SELECT r.id_reparation, r.surface_m2 FROM Reparation r WHERE r.id_signalement = $1',
+                [signalementId]
+            );
+
+            let budgetRecalcule = null;
+
+            if (reparationResult.rows.length > 0) {
+                const reparation = reparationResult.rows[0];
+                const surface_m2 = parseFloat(reparation.surface_m2);
+
+                // Récupérer le prix actif
+                const prixResult = await pool.query(
+                    'SELECT prix_par_m2 FROM PrixConfig WHERE est_actif = TRUE ORDER BY date_creation DESC LIMIT 1'
+                );
+
+                if (prixResult.rows.length > 0) {
+                    const prix_par_m2 = parseFloat(prixResult.rows[0].prix_par_m2);
+                    const nouveauBudget = Math.round(prix_par_m2 * niveau * surface_m2 * 100) / 100;
+
+                    await pool.query(
+                        'UPDATE Reparation SET budget = $1, est_synchronise = FALSE WHERE id_reparation = $2',
+                        [nouveauBudget, reparation.id_reparation]
+                    );
+
+                    budgetRecalcule = {
+                        id_reparation: reparation.id_reparation,
+                        formule: `${prix_par_m2} Ar × ${niveau} × ${surface_m2} m²`,
+                        ancien_budget: null,
+                        nouveau_budget: nouveauBudget
+                    };
+
+                    // Synchroniser la réparation mise à jour vers Firebase
+                    const updatedRep = await pool.query('SELECT * FROM Reparation WHERE id_reparation = $1', [reparation.id_reparation]);
+                    if (updatedRep.rows.length > 0) {
+                        await syncReparationToFirebase(updatedRep.rows[0], signalementId);
+                    }
+                }
+            }
+
+            // Synchroniser le signalement vers Firebase
+            await syncSignalementToFirebase(signalementId);
+
+            res.status(200).json({
+                success: true,
+                message: `Niveau de dégradation mis à jour de ${ancienNiveau || 'non défini'} à ${niveau}`,
+                signalement: {
+                    id_signalement: signalementId,
+                    niveau,
+                    ancien_niveau: ancienNiveau || null
+                },
+                ...(budgetRecalcule && { budget_recalcule: budgetRecalcule })
+            });
+        } catch (error: any) {
+            console.error('Erreur modification niveau:', error);
             res.status(500).json({ success: false, error: 'Erreur serveur' });
         }
     }
@@ -1010,6 +1461,12 @@ router.post('/:id/reparation',
  *               id_status:
  *                 type: integer
  *                 example: 2
+ *               niveau:
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 10
+ *                 example: 5
+ *                 description: "Niveau de dégradation (optionnel)"
  *               commentaire:
  *                 type: string
  *                 example: "Travaux démarrés"
@@ -1025,6 +1482,7 @@ router.put('/:id/status',
     [
         param('id').isInt({ min: 1 }).withMessage('ID signalement invalide'),
         body('id_status').isInt({ min: 1, max: 3 }).withMessage('ID statut invalide (1-3)'),
+        body('niveau').optional().isInt({ min: 1, max: 10 }).withMessage('Niveau doit être entre 1 et 10'),
         body('commentaire').optional().isString().withMessage('Commentaire invalide')
     ],
     async (req: Request, res: Response): Promise<void> => {
@@ -1039,27 +1497,34 @@ router.put('/:id/status',
             }
 
             const signalementId = parseInt(req.params.id, 10);
-            const { id_status, commentaire } = req.body;
+            const { id_status, niveau, commentaire } = req.body;
             const managerId = req.user?.id;
 
-            // Récupérer l'ancien statut
-            const oldStatusResult = await pool.query(
-                'SELECT id_status FROM Signalement WHERE id_signalement = $1',
+            // Récupérer l'ancien statut et le niveau actuel
+            const oldResult = await pool.query(
+                'SELECT id_status, niveau FROM Signalement WHERE id_signalement = $1',
                 [signalementId]
             );
 
-            if (oldStatusResult.rows.length === 0) {
+            if (oldResult.rows.length === 0) {
                 res.status(404).json({ success: false, error: 'Signalement non trouvé' });
                 return;
             }
 
-            const oldStatus = oldStatusResult.rows[0].id_status;
+            const oldStatus = oldResult.rows[0].id_status;
 
-            // Mettre à jour le statut du signalement et marquer non synchronisé
-            await pool.query(
-                'UPDATE Signalement SET id_status = $1, est_synchronise = FALSE WHERE id_signalement = $2',
-                [id_status, signalementId]
-            );
+            // Mettre à jour le statut et le niveau du signalement
+            if (niveau !== undefined) {
+                await pool.query(
+                    'UPDATE Signalement SET id_status = $1, niveau = $2, est_synchronise = FALSE WHERE id_signalement = $3',
+                    [id_status, niveau, signalementId]
+                );
+            } else {
+                await pool.query(
+                    'UPDATE Signalement SET id_status = $1, est_synchronise = FALSE WHERE id_signalement = $2',
+                    [id_status, signalementId]
+                );
+            }
 
             // Mettre à jour le statut de la réparation si elle existe
             const reparationResult = await pool.query(
@@ -1072,7 +1537,7 @@ router.put('/:id/status',
 
                 // Mettre à jour le statut de la réparation et marquer non synchronisé
                 await pool.query(
-                    'UPDATE Reparation SET id_status = $1, date_modification = CURRENT_TIMESTAMP, est_synchronise = FALSE WHERE id_reparation = $2',
+                    'UPDATE Reparation SET id_status = $1, est_synchronise = FALSE WHERE id_reparation = $2',
                     [id_status, reparationId]
                 );
 
@@ -1107,11 +1572,21 @@ router.put('/:id/status',
                 }
             }
 
+            // Synchroniser le signalement vers Firebase (nouveau statut)
+            await syncSignalementToFirebase(signalementId);
+
+            // Récupérer le signalement mis à jour
+            const updatedResult = await pool.query(
+                'SELECT id_status, niveau FROM Signalement WHERE id_signalement = $1',
+                [signalementId]
+            );
+
             res.status(200).json({
                 success: true,
                 message: 'Statut mis à jour',
                 old_status: oldStatus,
-                new_status: id_status
+                new_status: id_status,
+                niveau: updatedResult.rows[0]?.niveau || null
             });
         } catch (error: any) {
             console.error('Erreur modification statut:', error);
@@ -1243,6 +1718,8 @@ router.put('/manager/:id/assigner-entreprise',
             if (updatedReparation.rows.length > 0) {
                 await syncReparationToFirebase(updatedReparation.rows[0], signalementId);
             }
+            // Synchroniser le signalement vers Firebase
+            await syncSignalementToFirebase(signalementId);
 
             res.status(200).json({
                 success: true,
@@ -1362,6 +1839,7 @@ router.put('/manager/:id/budget',
 
             // Synchroniser avec Firebase
             await syncReparationToFirebase(result.rows[0], signalementId);
+            await syncSignalementToFirebase(signalementId);
 
             res.status(200).json({
                 success: true,
@@ -1482,6 +1960,7 @@ router.put('/manager/:id/surface',
 
             // Tenter de synchroniser avec Firebase
             await syncReparationToFirebase(result.rows[0], signalementId);
+            await syncSignalementToFirebase(signalementId);
 
             res.status(200).json({
                 success: true,
@@ -1637,6 +2116,7 @@ router.put('/manager/:id/gestion-complete',
 
             // Synchroniser avec Firebase
             await syncReparationToFirebase(result.rows[0], signalementId);
+            await syncSignalementToFirebase(signalementId);
 
             // Récupérer les détails de l'entreprise assignée
             const entrepriseDetails = await pool.query(
@@ -1761,6 +2241,9 @@ router.put('/manager/:id/modifier',
                            description, date_signalement, firebase_id, est_synchronise, id_user, id_status`,
                 values
             );
+
+            // Synchroniser le signalement vers Firebase
+            await syncSignalementToFirebase(id);
 
             res.status(200).json({
                 success: true,
